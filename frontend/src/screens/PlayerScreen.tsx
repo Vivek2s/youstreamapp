@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, StatusBar } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, StatusBar, NativeModules, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { WebView as WebViewType } from 'react-native-webview';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
+import Orientation from 'react-native-orientation-locker';
+
+const { ImmersiveMode } = NativeModules;
 import { colors, spacing } from '../theme';
 import { contentService } from '../services/content.service';
 import { HomeStackParamList } from '../types';
@@ -19,12 +22,36 @@ export default function PlayerScreen({ navigation, route }: Props) {
 
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [streamType, setStreamType] = useState<'hls' | 'raw'>('raw');
+  const [subtitles, setSubtitles] = useState<{ lang: string; url: string }[]>([]);
+  const [isPortrait, setIsPortrait] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    // Enter immersive fullscreen (hide Android nav bar)
+    if (Platform.OS === 'android' && ImmersiveMode) {
+      ImmersiveMode.enable();
+    }
     loadStreamUrl();
+    return () => {
+      // Exit immersive and re-lock to portrait when leaving player
+      if (Platform.OS === 'android' && ImmersiveMode) {
+        ImmersiveMode.disable();
+      }
+      Orientation.lockToPortrait();
+    };
   }, [contentId]);
+
+  // Lock orientation based on video aspect ratio
+  useEffect(() => {
+    if (streamUrl) {
+      if (isPortrait) {
+        Orientation.lockToPortrait();
+      } else {
+        Orientation.lockToLandscape();
+      }
+    }
+  }, [streamUrl, isPortrait]);
 
   const loadStreamUrl = async () => {
     try {
@@ -32,6 +59,8 @@ export default function PlayerScreen({ navigation, route }: Props) {
       console.log('[Player] Stream URL:', data.hlsUrl, 'type:', data.streamType);
       setStreamUrl(data.hlsUrl);
       setStreamType(data.streamType || 'raw');
+      setSubtitles(data.subtitles || []);
+      setIsPortrait(data.isPortrait || false);
     } catch (err: any) {
       console.log('[Player] Error loading stream:', err.message);
       setError('No stream available for this content');
@@ -72,7 +101,7 @@ export default function PlayerScreen({ navigation, route }: Props) {
   const html = `
 <!DOCTYPE html>
 <html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   body { background:#000; width:100vw; height:100vh; overflow:hidden; font-family:-apple-system,sans-serif; }
@@ -88,20 +117,21 @@ export default function PlayerScreen({ navigation, route }: Props) {
   .overlay.hidden { opacity:0; }
   .overlay > * { pointer-events:auto; }
 
-  /* Top bar */
+  /* Top bar — safe area aware */
   .top-bar {
     display:flex; align-items:center; gap:14px;
-    padding:20px 16px 32px;
+    padding:calc(20px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) 16px calc(16px + env(safe-area-inset-left, 0px));
     background:linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
   }
   .back-btn {
     width:40px; height:40px; display:flex; align-items:center; justify-content:center;
-    background:none; border:none; cursor:pointer;
+    background:none; border:none; cursor:pointer; flex-shrink:0;
   }
   .back-btn svg { width:26px; height:26px; filter:drop-shadow(0 1px 3px rgba(0,0,0,0.8)); }
   .video-title {
-    color:#fff; font-size:16px; font-weight:700; letter-spacing:0.3px;
-    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;
+    color:#fff; font-size:15px; font-weight:700; letter-spacing:0.3px;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+    overflow:hidden; white-space:normal; flex:1;
     text-shadow:0 1px 4px rgba(0,0,0,0.8);
   }
 
@@ -126,9 +156,9 @@ export default function PlayerScreen({ navigation, route }: Props) {
   }
   .play-btn svg { width:32px; height:32px; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5)); }
 
-  /* Netflix-style bottom bar */
+  /* Netflix-style bottom bar — safe area aware */
   .bottom-bar {
-    padding:0 16px 48px;
+    padding:0 calc(16px + env(safe-area-inset-right, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
     background:linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 50%, transparent 100%);
   }
   .progress-wrap {
@@ -170,7 +200,7 @@ export default function PlayerScreen({ navigation, route }: Props) {
   /* Quality selector */
   .quality-btn {
     width:40px; height:40px; display:flex; align-items:center; justify-content:center;
-    background:none; border:none; cursor:pointer;
+    background:none; border:none; cursor:pointer; flex-shrink:0;
   }
   .quality-btn svg { width:22px; height:22px; filter:drop-shadow(0 1px 3px rgba(0,0,0,0.8)); }
   .quality-panel {
@@ -199,6 +229,22 @@ export default function PlayerScreen({ navigation, route }: Props) {
     font-size:9px; font-weight:800; padding:1px 4px; border-radius:2px;
     margin-left:6px; vertical-align:middle;
   }
+
+  /* Subtitle selector */
+  .sub-btn {
+    width:40px; height:40px; display:flex; align-items:center; justify-content:center;
+    background:none; border:none; cursor:pointer; flex-shrink:0;
+  }
+  .sub-btn svg { width:22px; height:22px; filter:drop-shadow(0 1px 3px rgba(0,0,0,0.8)); }
+  .sub-panel {
+    position:fixed; right:12px; bottom:90px;
+    background:rgba(20,20,20,0.95); border-radius:10px;
+    padding:8px 0; min-width:130px;
+    display:none; z-index:20;
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    box-shadow:0 4px 20px rgba(0,0,0,0.5);
+  }
+  .sub-panel.show { display:block; }
 </style>
 </head><body>
 
@@ -206,6 +252,7 @@ export default function PlayerScreen({ navigation, route }: Props) {
 <div class="quality-panel" id="qualityPanel">
   <div class="quality-panel-title">Quality</div>
 </div>
+<div class="sub-panel" id="subPanel"></div>
 
 <div class="overlay" id="overlay">
   <div class="top-bar">
@@ -215,6 +262,11 @@ export default function PlayerScreen({ navigation, route }: Props) {
       </svg>
     </button>
     <div class="video-title">${safeTitle}</div>
+    <button class="sub-btn" id="subBtn" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/>
+      </svg>
+    </button>
     <button class="quality-btn" id="qualityBtn" style="display:none">
       <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
@@ -270,16 +322,20 @@ var cur = document.getElementById('cur');
 var dur = document.getElementById('dur');
 var qualityBtn = document.getElementById('qualityBtn');
 var qualityPanel = document.getElementById('qualityPanel');
+var subBtn = document.getElementById('subBtn');
+var subPanel = document.getElementById('subPanel');
 var hideTimer;
 var hls = null;
 var streamType = '${streamType}';
 var streamUrl = '${streamUrl}';
+var subtitles = ${JSON.stringify(subtitles)};
 
 var playSvg = '<polygon points="6,3 20,12 6,21"/>';
 var pauseSvg = '<rect x="5" y="3" width="4.5" height="18" rx="1"/><rect x="14.5" y="3" width="4.5" height="18" rx="1"/>';
 
 function fmt(s) {
-  var m = Math.floor(s/60), sec = Math.floor(s%60);
+  var h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
+  if (h > 0) return h + ':' + (m<10?'0':'') + m + ':' + (sec<10?'0':'') + sec;
   return m + ':' + (sec<10?'0':'') + sec;
 }
 
@@ -340,16 +396,63 @@ function setQuality(level, el) {
 // Toggle quality panel
 qualityBtn.addEventListener('click', function(e) {
   e.stopPropagation();
+  subPanel.classList.remove('show');
   qualityPanel.classList.toggle('show');
   showOverlay();
 });
 
-// Tap anywhere to toggle overlay / close quality panel
-document.body.addEventListener('click', function(e) {
-  if (e.target.closest('.quality-panel')) return;
-  if (e.target.closest('.quality-btn')) return;
-  if (e.target.closest('.overlay > *')) { qualityPanel.classList.remove('show'); return; }
+// --- Subtitle support ---
+var activeSubTrack = -1;
+if (subtitles && subtitles.length > 0) {
+  subBtn.style.display = 'flex';
+  // Add <track> elements to video
+  subtitles.forEach(function(sub, i) {
+    var track = document.createElement('track');
+    track.kind = 'subtitles';
+    track.label = sub.lang;
+    track.srclang = sub.lang;
+    track.src = sub.url;
+    track.default = false;
+    v.appendChild(track);
+  });
+  // Build subtitle panel
+  var subHtml = '<div class="quality-panel-title">Subtitles</div>';
+  subHtml += '<button class="quality-option active" onclick="setSub(-1, this)"><span>Off</span><span class="check">✓</span></button>';
+  subtitles.forEach(function(sub, i) {
+    subHtml += '<button class="quality-option" onclick="setSub(' + i + ', this)"><span>' + sub.lang + '</span><span class="check"></span></button>';
+  });
+  subPanel.innerHTML = subHtml;
+}
+
+function setSub(idx, el) {
+  activeSubTrack = idx;
+  for (var i = 0; i < v.textTracks.length; i++) {
+    v.textTracks[i].mode = (i === idx) ? 'showing' : 'hidden';
+  }
+  subPanel.querySelectorAll('.quality-option').forEach(function(btn) {
+    btn.classList.remove('active');
+    btn.querySelector('.check').textContent = '';
+  });
+  el.classList.add('active');
+  el.querySelector('.check').textContent = '✓';
+  subPanel.classList.remove('show');
+  showOverlay();
+}
+
+subBtn.addEventListener('click', function(e) {
+  e.stopPropagation();
   qualityPanel.classList.remove('show');
+  subPanel.classList.toggle('show');
+  showOverlay();
+});
+
+// Tap anywhere to toggle overlay / close panels
+document.body.addEventListener('click', function(e) {
+  if (e.target.closest('.quality-panel') || e.target.closest('.sub-panel')) return;
+  if (e.target.closest('.quality-btn') || e.target.closest('.sub-btn')) return;
+  if (e.target.closest('.overlay > *')) { qualityPanel.classList.remove('show'); subPanel.classList.remove('show'); return; }
+  qualityPanel.classList.remove('show');
+  subPanel.classList.remove('show');
   if (overlay.classList.contains('hidden')) { showOverlay(); }
   else { overlay.classList.add('hidden'); }
 });

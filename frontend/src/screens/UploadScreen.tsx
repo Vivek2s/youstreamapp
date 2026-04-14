@@ -336,6 +336,23 @@ export default function UploadScreen() {
     );
   }
 
+  const handleCancelDownload = () => {
+    Alert.alert('Cancel Download', 'Stop the download and remove this content?', [
+      { text: 'No', style: 'cancel' },
+      {
+        text: 'Yes, Cancel',
+        style: 'destructive',
+        onPress: async () => {
+          if (pollRef.current) clearInterval(pollRef.current);
+          try {
+            if (contentId) await contentService.cancelTorrent(contentId);
+          } catch {}
+          reset();
+        },
+      },
+    ]);
+  };
+
   // --- STEP: Downloading (torrent) ---
   if (step === 'downloading') {
     return (
@@ -352,6 +369,9 @@ export default function UploadScreen() {
               ? `${(downloadSpeed / 1024 / 1024).toFixed(1)} MB/s`
               : 'Connecting to peers...'}
           </Text>
+          <TouchableOpacity style={styles.secondaryBtn} onPress={handleCancelDownload} activeOpacity={0.8}>
+            <Text style={styles.secondaryBtnText}>Cancel Download</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );

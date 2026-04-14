@@ -8,7 +8,7 @@ import { MainTabParamList, HomeStackParamList } from '../types';
 
 import HomeScreen from '../screens/HomeScreen';
 import SearchScreen from '../screens/SearchScreen';
-import MyListScreen from '../screens/MyListScreen';
+import ActivityScreen from '../screens/ActivityScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import UploadScreen from '../screens/UploadScreen';
 import ContentDetailScreen from '../screens/ContentDetailScreen';
@@ -49,16 +49,6 @@ function TabNavigator() {
         }}
       />
       <Tab.Screen
-        name="Search"
-        component={SearchScreen}
-        options={{
-          tabBarLabel: 'Search',
-          tabBarIcon: ({ color }) => (
-            <TabIcon color={color} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          ),
-        }}
-      />
-      <Tab.Screen
         name="Upload"
         component={UploadScreen}
         options={{
@@ -69,12 +59,12 @@ function TabNavigator() {
         }}
       />
       <Tab.Screen
-        name="MyList"
-        component={MyListScreen}
+        name="Activity"
+        component={ActivityScreen}
         options={{
-          tabBarLabel: 'My List',
+          tabBarLabel: 'Activity',
           tabBarIcon: ({ color }) => (
-            <TabIcon color={color} d="M4 6h16M4 12h16M4 18h16" />
+            <TabIcon color={color} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           ),
         }}
       />
@@ -92,11 +82,19 @@ function TabNavigator() {
   );
 }
 
-// Root stack: Tabs + fullscreen screens (ContentDetail, Player)
+// Root stack: Tabs + fullscreen screens (ContentDetail, Player, Search)
 export default function MainNavigator() {
   return (
     <RootStack.Navigator screenOptions={{ headerShown: false }}>
       <RootStack.Screen name="HomeScreen" component={TabNavigator} />
+      <RootStack.Screen
+        name="Search"
+        component={SearchScreen}
+        options={{
+          headerShown: false,
+          animation: 'fade',
+        }}
+      />
       <RootStack.Screen
         name="ContentDetail"
         component={ContentDetailScreen}

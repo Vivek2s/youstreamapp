@@ -1,13 +1,18 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { StatusBar } from 'react-native';
 import { Provider } from 'react-redux';
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import Orientation from 'react-native-orientation-locker';
 import { store } from './src/store/store';
 import AppNavigator from './src/navigation/AppNavigator';
 import { colors } from './src/theme/colors';
 
 export default function App() {
+  useEffect(() => {
+    Orientation.lockToPortrait();
+  }, []);
+
   return (
     <Provider store={store}>
       <SafeAreaProvider>

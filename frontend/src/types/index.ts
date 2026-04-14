@@ -100,14 +100,14 @@ export type AuthStackParamList = {
 
 export type MainTabParamList = {
   Home: undefined;
-  Search: undefined;
   Upload: undefined;
-  MyList: undefined;
+  Activity: undefined;
   Profile: undefined;
 };
 
 export type HomeStackParamList = {
   HomeScreen: undefined;
+  Search: undefined;
   ContentDetail: { contentId: string };
   Player: { contentId: string; title: string };
 };

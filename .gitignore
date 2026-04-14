@@ -1,0 +1,4 @@
+mongodata/
+storage/
+*.log
+.DS_Store
