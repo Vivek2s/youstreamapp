@@ -1,0 +1,17 @@
+{
+  "name": "api",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/api/src",
+  "projectType": "application",
+  "targets": {
+    "serve": {
+      "command": "tsx watch apps/api/src/main.ts",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "build": {
+      "command": "tsc -p apps/api/tsconfig.app.json"
+    }
+  }
+}

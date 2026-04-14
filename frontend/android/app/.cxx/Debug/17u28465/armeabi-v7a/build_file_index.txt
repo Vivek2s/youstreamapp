@@ -1,0 +1,9 @@
+/Volumes/Work/extra/YouStream/frontend/node_modules/@react-native-async-storage/async-storage/android/build/generated/source/codegen/jni/CMakeLists.txt
+/Volumes/Work/extra/YouStream/frontend/node_modules/@react-native-documents/picker/android/build/generated/source/codegen/jni/CMakeLists.txt
+/Volumes/Work/extra/YouStream/frontend/node_modules/react-native-blob-util/android/build/generated/source/codegen/jni/CMakeLists.txt
+/Volumes/Work/extra/YouStream/frontend/node_modules/react-native-image-picker/android/build/generated/source/codegen/jni/CMakeLists.txt
+/Volumes/Work/extra/YouStream/frontend/node_modules/react-native-safe-area-context/android/src/main/jni/CMakeLists.txt
+/Volumes/Work/extra/YouStream/frontend/node_modules/react-native-screens/android/src/main/jni/CMakeLists.txt
+/Volumes/Work/extra/YouStream/frontend/node_modules/react-native-svg/android/src/main/jni/CMakeLists.txt
+/Volumes/Work/extra/YouStream/frontend/node_modules/react-native-webview/android/build/generated/source/codegen/jni/CMakeLists.txt
+/Volumes/Work/extra/YouStream/frontend/node_modules/react-native/ReactAndroid/cmake-utils/default-app-setup/CMakeLists.txt

@@ -1,0 +1,211 @@
+{
+  "version": "6.0",
+  "nxVersion": "22.5.2",
+  "pathMappings": {
+    "@youstream/*": [
+      "libs/*/src/index.ts"
+    ]
+  },
+  "nxJsonPlugins": [],
+  "fileMap": {
+    "nonProjectFiles": [
+      {
+        "file": ".env.example",
+        "hash": "1868712979960270485"
+      },
+      {
+        "file": ".gitignore",
+        "hash": "14816009773745078389"
+      },
+      {
+        "file": "docker-compose.yml",
+        "hash": "14548930318167526807"
+      },
+      {
+        "file": "package-lock.json",
+        "hash": "4594762101563575684"
+      },
+      {
+        "file": "package.json",
+        "hash": "10612773602900463403"
+      },
+      {
+        "file": "tsconfig.base.json",
+        "hash": "7487165567490168249"
+      },
+      {
+        "file": ".dockerignore",
+        "hash": "14380424468405973006"
+      },
+      {
+        "file": "scripts/deploy.sh",
+        "hash": "16176292962959926798"
+      },
+      {
+        "file": "nx.json",
+        "hash": "12430759274908369635"
+      },
+      {
+        "file": "Dockerfile",
+        "hash": "16286464603807096566"
+      }
+    ],
+    "projectFileMap": {
+      "api": [
+        {
+          "file": "apps/api/project.json",
+          "hash": "14485470743752976988"
+        },
+        {
+          "file": "apps/api/src/app.ts",
+          "hash": "9052513536464280989"
+        },
+        {
+          "file": "apps/api/src/config/index.ts",
+          "hash": "15905150883490597783"
+        },
+        {
+          "file": "apps/api/src/controllers/auth.controller.ts",
+          "hash": "11501312592312616261"
+        },
+        {
+          "file": "apps/api/src/controllers/content.controller.ts",
+          "hash": "16205100825617062865"
+        },
+        {
+          "file": "apps/api/src/controllers/search.controller.ts",
+          "hash": "18235585041375384970"
+        },
+        {
+          "file": "apps/api/src/controllers/streaming.controller.ts",
+          "hash": "7641829263291364613"
+        },
+        {
+          "file": "apps/api/src/controllers/torrent.controller.ts",
+          "hash": "10068896659483052290"
+        },
+        {
+          "file": "apps/api/src/controllers/upload.controller.ts",
+          "hash": "13169206052008154278"
+        },
+        {
+          "file": "apps/api/src/controllers/user.controller.ts",
+          "hash": "4581806501032099985"
+        },
+        {
+          "file": "apps/api/src/database/connection.ts",
+          "hash": "10977624394861490976"
+        },
+        {
+          "file": "apps/api/src/main.ts",
+          "hash": "4197673137571490691"
+        },
+        {
+          "file": "apps/api/src/middleware/auth.middleware.ts",
+          "hash": "14312970138533009032"
+        },
+        {
+          "file": "apps/api/src/middleware/error.middleware.ts",
+          "hash": "14819515949871344839"
+        },
+        {
+          "file": "apps/api/src/models/category.model.ts",
+          "hash": "9386289614852042931"
+        },
+        {
+          "file": "apps/api/src/models/content.model.ts",
+          "hash": "16362189462567289010"
+        },
+        {
+          "file": "apps/api/src/models/device.model.ts",
+          "hash": "12011053728717798180"
+        },
+        {
+          "file": "apps/api/src/models/favorite.model.ts",
+          "hash": "12371176364424110764"
+        },
+        {
+          "file": "apps/api/src/models/genre.model.ts",
+          "hash": "1921012305535480571"
+        },
+        {
+          "file": "apps/api/src/models/otp.model.ts",
+          "hash": "977153026737869313"
+        },
+        {
+          "file": "apps/api/src/models/profile.model.ts",
+          "hash": "3297011863043546305"
+        },
+        {
+          "file": "apps/api/src/models/qr-session.model.ts",
+          "hash": "8156541053196337454"
+        },
+        {
+          "file": "apps/api/src/models/user.model.ts",
+          "hash": "18233725193341194390"
+        },
+        {
+          "file": "apps/api/src/models/watch-history.model.ts",
+          "hash": "12506113320643249586"
+        },
+        {
+          "file": "apps/api/src/routes/auth.routes.ts",
+          "hash": "14522460562034017407"
+        },
+        {
+          "file": "apps/api/src/routes/content.routes.ts",
+          "hash": "5539864907685707425"
+        },
+        {
+          "file": "apps/api/src/routes/index.ts",
+          "hash": "16976232890157232223"
+        },
+        {
+          "file": "apps/api/src/routes/search.routes.ts",
+          "hash": "7401704228546845244"
+        },
+        {
+          "file": "apps/api/src/routes/streaming.routes.ts",
+          "hash": "6572419453092680499"
+        },
+        {
+          "file": "apps/api/src/routes/upload.routes.ts",
+          "hash": "8010388412947183917"
+        },
+        {
+          "file": "apps/api/src/routes/user.routes.ts",
+          "hash": "6242197698048362500"
+        },
+        {
+          "file": "apps/api/src/seeds/seed.ts",
+          "hash": "7193975142177742326"
+        },
+        {
+          "file": "apps/api/src/types/torrent-stream.d.ts",
+          "hash": "2182691112910954780"
+        },
+        {
+          "file": "apps/api/src/utils/jwt.ts",
+          "hash": "13306257756041359988"
+        },
+        {
+          "file": "apps/api/src/utils/response.ts",
+          "hash": "17951975561409056875"
+        },
+        {
+          "file": "apps/api/src/utils/s3.ts",
+          "hash": "8500791530079417988"
+        },
+        {
+          "file": "apps/api/tsconfig.app.json",
+          "hash": "14750427383869109789"
+        },
+        {
+          "file": "apps/api/tsconfig.json",
+          "hash": "13870431419182333108"
+        }
+      ]
+    }
+  },
+  "externalNodesHash": "10916457189914140477"
+}

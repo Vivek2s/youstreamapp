@@ -1,0 +1,4 @@
+/Volumes/Work/extra/YouStream/frontend/android/app/.cxx/Debug/17u28465/x86/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/foo.dir
+/Volumes/Work/extra/YouStream/frontend/android/app/.cxx/Debug/17u28465/x86/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/boo.dir
+/Volumes/Work/extra/YouStream/frontend/android/app/.cxx/Debug/17u28465/x86/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/edit_cache.dir
+/Volumes/Work/extra/YouStream/frontend/android/app/.cxx/Debug/17u28465/x86/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/rebuild_cache.dir
