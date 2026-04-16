@@ -3,307 +3,206 @@ import path from 'path';
 import fs from 'fs';
 import torrentStream from 'torrent-stream';
 import { Content } from '../models/content.model';
+import { Job } from '../models/job.model';
 import { sendSuccess, sendError } from '../utils/response';
 import { config } from '../config';
-import { exec } from 'child_process';
+import { enqueueJob, cancelJob } from '../queues/jobQueue';
+import { deleteLocalDirectory } from '../utils/s3';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const parseTorrent = require('parse-torrent');
-import { getVideoInfo, getVideoContentType, transcodeToHLS, UPLOADS_DIR } from './upload.controller';
-import { uploadFileToS3, deleteLocalDirectory } from '../utils/s3';
 
 const TORRENTS_DIR = path.join(config.storageRoot, 'torrents');
+const UPLOADS_DIR = path.join(config.storageRoot, 'uploads');
 fs.mkdirSync(TORRENTS_DIR, { recursive: true });
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv'];
 
-// Track active torrent engines for concurrency limit and cleanup
-const activeTorrents = new Map<string, any>();
+// --- Episode name parser (used only for building initial episode metadata) ---
+function parseEpisodeInfo(filename: string): { season: number; episode: number; title: string } {
+  const base = path.basename(filename, path.extname(filename));
 
-function findLargestVideoFile(dir: string): string | null {
-  const result = { path: '', size: 0 };
-  let found = false;
+  let m = base.match(/[Ss](\d+)[Ee](\d+)/);
+  if (m) return { season: parseInt(m[1]), episode: parseInt(m[2]), title: base.replace(m[0], '').replace(/[._-]+/g, ' ').trim() || `Episode ${parseInt(m[2])}` };
 
-  function scan(currentDir: string) {
-    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(currentDir, entry.name);
-      if (entry.isDirectory()) {
-        scan(fullPath);
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase();
-        if (VIDEO_EXTENSIONS.includes(ext)) {
-          const stat = fs.statSync(fullPath);
-          if (!found || stat.size > result.size) {
-            result.path = fullPath;
-            result.size = stat.size;
-            found = true;
-          }
-        }
-      }
-    }
-  }
+  m = base.match(/(\d+)x(\d+)/i);
+  if (m) return { season: parseInt(m[1]), episode: parseInt(m[2]), title: base.replace(m[0], '').replace(/[._-]+/g, ' ').trim() || `Episode ${parseInt(m[2])}` };
 
-  scan(dir);
-  return found ? result.path : null;
+  m = base.match(/season\s*(\d+)\s*episode\s*(\d+)/i);
+  if (m) return { season: parseInt(m[1]), episode: parseInt(m[2]), title: `Episode ${parseInt(m[2])}` };
+
+  m = base.match(/[Ee][Pp]?(\d+)/);
+  if (m) return { season: 1, episode: parseInt(m[1]), title: base.replace(m[0], '').replace(/[._-]+/g, ' ').trim() || `Episode ${parseInt(m[1])}` };
+
+  return { season: 1, episode: 0, title: base.replace(/[._-]+/g, ' ').trim() };
 }
 
-async function handleTorrentError(contentId: string, engine: any, message: string) {
-  console.error(`❌ Torrent error for ${contentId}: ${message}`);
+// Temporary store for parsed torrent data (cleaned up after 30 min)
+const parsedTorrents = new Map<string, { source: string; files: any[]; timer: ReturnType<typeof setTimeout> }>();
+
+// POST /api/v1/upload/torrent/parse — Parse torrent and return file list
+export async function parseTorrentFiles(req: Request, res: Response) {
   try {
-    await Content.findByIdAndUpdate(contentId, {
-      $set: {
-        status: 'error',
-        'torrent.errorMessage': message,
-      },
-    });
-  } catch (e) {
-    console.error('Failed to update content status to error:', e);
-  }
+    const magnetLink = req.body?.magnetLink;
 
-  // Clean up engine
-  if (engine) {
-    try {
-      engine.destroy(() => {});
-    } catch {}
-  }
-  activeTorrents.delete(contentId);
+    if (magnetLink && magnetLink.startsWith('magnet:')) {
+      console.log(`🧲 Parsing magnet: ${magnetLink.substring(0, 60)}...`);
 
-  // Clean up torrent files
-  const torrentDir = path.join(TORRENTS_DIR, contentId);
-  if (fs.existsSync(torrentDir)) {
-    deleteLocalDirectory(torrentDir);
-  }
-}
+      const torrentId = `mag_${Date.now()}`;
+      const tempDir = path.join(TORRENTS_DIR, torrentId, 'data');
+      fs.mkdirSync(tempDir, { recursive: true });
 
-// Extensions that can be played natively in HTML5 video (no remux needed)
-const WEB_PLAYABLE = ['.mp4', '.webm'];
-
-function remuxToMp4(inputPath: string, outputPath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const cmd = `ffmpeg -i "${inputPath}" -c copy -movflags +faststart "${outputPath}"`;
-    console.log(`🔄 Remuxing to MP4: ${path.basename(inputPath)}`);
-    exec(cmd, (error) => {
-      if (error) return reject(error);
-      resolve();
-    });
-  });
-}
-
-async function startTorrentDownload(contentId: string, torrentFilePath: string, transcode: boolean) {
-  const downloadDir = path.join(TORRENTS_DIR, contentId, 'data');
-  fs.mkdirSync(downloadDir, { recursive: true });
-
-  let engine: any;
-  try {
-    const torrentBuffer = fs.readFileSync(torrentFilePath);
-    engine = torrentStream(torrentBuffer, {
-      path: downloadDir,
-      connections: 50,
-      uploads: 0,
-      verify: true,
-      dht: true,
-      tracker: true,
-    });
-  } catch (err: any) {
-    await handleTorrentError(contentId, null, `Invalid torrent file: ${err.message}`);
-    return;
-  }
-
-  activeTorrents.set(contentId, engine);
-
-  let selectedFile: any = null;
-  let totalSize = 0;
-  let lastDownloaded = 0;
-  let stallCount = 0;
-  let progressInterval: ReturnType<typeof setInterval> | null = null;
-  let stallInterval: ReturnType<typeof setInterval> | null = null;
-
-  const cleanup = () => {
-    if (progressInterval) clearInterval(progressInterval);
-    if (stallInterval) clearInterval(stallInterval);
-  };
-
-  engine.on('ready', async () => {
-    console.log(`📥 Torrent ready for ${contentId}, ${engine.files.length} files found`);
-
-    // Find the largest video file in the torrent
-    let largestVideo: any = null;
-    for (const file of engine.files) {
-      const ext = path.extname(file.name).toLowerCase();
-      if (VIDEO_EXTENSIONS.includes(ext)) {
-        if (!largestVideo || file.length > largestVideo.length) {
-          largestVideo = file;
-        }
-      }
-    }
-
-    if (!largestVideo) {
-      cleanup();
-      await handleTorrentError(contentId, engine, 'No video files found in torrent');
-      return;
-    }
-
-    selectedFile = largestVideo;
-    totalSize = largestVideo.length;
-
-    // Select only the video file, deselect everything else
-    for (const file of engine.files) {
-      if (file === largestVideo) {
-        file.select();
-      } else {
-        file.deselect();
-      }
-    }
-
-    // Update Content with file size
-    await Content.findByIdAndUpdate(contentId, {
-      $set: { 'torrent.fileSize': totalSize },
-    });
-
-    console.log(`📥 Downloading: ${largestVideo.name} (${(totalSize / 1024 / 1024).toFixed(1)} MB)`);
-
-    // Progress updates every 3 seconds
-    progressInterval = setInterval(async () => {
-      try {
-        const downloaded = engine.swarm?.downloaded || 0;
-        const progress = totalSize > 0 ? Math.min(Math.round((downloaded / totalSize) * 100), 100) : 0;
-        const speed = engine.swarm?.downloadSpeed ? engine.swarm.downloadSpeed() : 0;
-        await Content.findByIdAndUpdate(contentId, {
-          $set: {
-            'torrent.downloadProgress': progress,
-            'torrent.downloadSpeed': speed,
-          },
-        });
-      } catch {}
-    }, 3000);
-
-    // Stall detection every 3 seconds — abort after 5 minutes of no progress
-    const maxStallChecks = Math.ceil(config.torrentStallTimeoutMs / 3000);
-    stallInterval = setInterval(() => {
-      const currentDownloaded = engine.swarm?.downloaded || 0;
-      if (currentDownloaded === lastDownloaded) {
-        stallCount++;
-        if (stallCount >= maxStallChecks) {
-          cleanup();
-          handleTorrentError(contentId, engine, 'Download stalled — no progress for 5 minutes');
-        }
-      } else {
-        stallCount = 0;
-        lastDownloaded = currentDownloaded;
-      }
-    }, 3000);
-  });
-
-  engine.on('idle', async () => {
-    if (!selectedFile) return;
-
-    cleanup();
-    console.log(`✅ Torrent download complete for ${contentId}`);
-
-    // Update progress to 100%
-    await Content.findByIdAndUpdate(contentId, {
-      $set: { 'torrent.downloadProgress': 100, 'torrent.downloadSpeed': 0 },
-    });
-
-    // Find the downloaded video file on disk
-    const videoFilePath = findLargestVideoFile(downloadDir);
-    if (!videoFilePath) {
-      await handleTorrentError(contentId, engine, 'Downloaded file not found on disk');
-      return;
-    }
-
-    // Move video to uploads dir for transcoding
-    const ext = path.extname(videoFilePath);
-    const uploadDir = path.join(UPLOADS_DIR, contentId);
-    fs.mkdirSync(uploadDir, { recursive: true });
-    const inputPath = path.join(uploadDir, `raw${ext}`);
-
-    try {
-      fs.copyFileSync(videoFilePath, inputPath);
-    } catch (err: any) {
-      await handleTorrentError(contentId, engine, `Failed to move video file: ${err.message}`);
-      return;
-    }
-
-    // Clean up torrent download data and engine
-    engine.destroy(() => {});
-    activeTorrents.delete(contentId);
-    deleteLocalDirectory(path.join(TORRENTS_DIR, contentId));
-
-    // Probe video
-    const videoInfo = getVideoInfo(inputPath);
-
-    if (transcode) {
-      // Full HLS transcode
-      await Content.findByIdAndUpdate(contentId, {
-        $set: {
-          status: 'transcoding',
-          duration: Math.round(videoInfo.duration / 60),
-          isPortrait: videoInfo.isPortrait,
-        },
+      const engine = torrentStream(magnetLink, {
+        path: tempDir,
+        connections: 50,
+        uploads: 0,
+        dht: true,
+        tracker: true,
       });
-      console.log(`🔄 Starting transcode for torrent content ${contentId}`);
-      transcodeToHLS(contentId, inputPath, videoInfo);
-    } else {
-      // Direct serve — remux to MP4 if not web-playable
-      let servePath = inputPath;
-      let serveExt = ext;
 
-      if (!WEB_PLAYABLE.includes(ext.toLowerCase())) {
-        const mp4Path = path.join(uploadDir, 'raw.mp4');
-        try {
-          await remuxToMp4(inputPath, mp4Path);
-          // Remove original, use remuxed
-          fs.unlinkSync(inputPath);
-          servePath = mp4Path;
-          serveExt = '.mp4';
-          console.log(`✅ Remuxed ${ext} → .mp4 for ${contentId}`);
-        } catch (err: any) {
-          console.error(`❌ Remux failed for ${contentId}, falling back to transcode:`, err.message);
-          await Content.findByIdAndUpdate(contentId, {
-            $set: { status: 'transcoding', duration: Math.round(videoInfo.duration / 60) },
+      const fileList = await new Promise<any[]>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          engine.destroy(() => {});
+          deleteLocalDirectory(path.join(TORRENTS_DIR, torrentId));
+          reject(new Error('Timeout waiting for magnet metadata (30s). Try a different magnet link.'));
+        }, 30000);
+
+        engine.on('ready', () => {
+          clearTimeout(timeout);
+          const files = engine.files.map((f: any, i: number) => {
+            const ext = path.extname(f.name).toLowerCase();
+            return { index: i, name: f.name, size: f.length, isVideo: VIDEO_EXTENSIONS.includes(ext) };
           });
-          transcodeToHLS(contentId, inputPath, videoInfo);
-          return;
-        }
-      }
+          engine.files.forEach((f: any) => f.deselect());
+          engine.destroy(() => {});
+          deleteLocalDirectory(path.join(TORRENTS_DIR, torrentId));
+          resolve(files);
+        });
 
-      // Upload to S3 or serve locally
-      if (config.storageMode === 's3') {
-        const rawS3Key = `${contentId}/original${serveExt}`;
-        await uploadFileToS3(servePath, config.awsS3StreamingBucket, rawS3Key, getVideoContentType(serveExt));
-        const rawUrl = `${config.cloudfrontDomain}/${contentId}/original${serveExt}`;
-        await Content.findByIdAndUpdate(contentId, {
-          $set: {
-            status: 'published',
-            rawUrl,
-            duration: Math.round(videoInfo.duration / 60),
-            isPortrait: videoInfo.isPortrait,
-            streaming: { hlsUrl: '', subtitles: [] },
-          },
+        engine.on('error', (err: Error) => {
+          clearTimeout(timeout);
+          engine.destroy(() => {});
+          deleteLocalDirectory(path.join(TORRENTS_DIR, torrentId));
+          reject(err);
         });
-        deleteLocalDirectory(uploadDir);
-        console.log(`✅ Published (direct serve): ${contentId} → ${rawUrl}`);
-      } else {
-        const rawUrl = `/uploads/${contentId}/raw${serveExt}`;
-        await Content.findByIdAndUpdate(contentId, {
-          $set: {
-            status: 'published',
-            rawUrl,
-            duration: Math.round(videoInfo.duration / 60),
-            isPortrait: videoInfo.isPortrait,
-            streaming: { hlsUrl: '', subtitles: [] },
-          },
-        });
-        console.log(`✅ Published (direct serve, local): ${contentId}`);
-      }
+      });
+
+      const storeId = `magnet_${Date.now()}`;
+      const timer = setTimeout(() => parsedTorrents.delete(storeId), 30 * 60 * 1000);
+      parsedTorrents.set(storeId, { source: magnetLink, files: fileList, timer });
+
+      return sendSuccess(res, { torrentId: storeId, files: fileList });
     }
-  });
 
-  engine.on('error', async (err: Error) => {
-    cleanup();
-    await handleTorrentError(contentId, engine, err.message);
-  });
+    // .torrent file
+    if (!req.file) {
+      return sendError(res, 'VALIDATION', 'Provide a .torrent file or magnetLink in body');
+    }
+
+    const torrentBuffer = fs.readFileSync(req.file.path);
+    let parsed: any;
+    try {
+      parsed = parseTorrent(torrentBuffer);
+    } catch {
+      fs.unlinkSync(req.file.path);
+      return sendError(res, 'VALIDATION', 'Invalid torrent file');
+    }
+
+    const files = (parsed.files || []).map((f: any, i: number) => {
+      const name = f.name || f.path || `file_${i}`;
+      const ext = path.extname(name).toLowerCase();
+      return { index: i, name, size: f.length || 0, isVideo: VIDEO_EXTENSIONS.includes(ext) };
+    });
+
+    const storeId = `file_${Date.now()}`;
+    const torrentPath = path.join(TORRENTS_DIR, `${storeId}.torrent`);
+    fs.renameSync(req.file.path, torrentPath);
+    const timer = setTimeout(() => {
+      parsedTorrents.delete(storeId);
+      if (fs.existsSync(torrentPath)) fs.unlinkSync(torrentPath);
+    }, 30 * 60 * 1000);
+    parsedTorrents.set(storeId, { source: torrentPath, files, timer });
+
+    return sendSuccess(res, { torrentId: storeId, files });
+  } catch (error: any) {
+    console.error('parseTorrentFiles error:', error);
+    return sendError(res, 'SERVER_ERROR', error.message || 'Failed to parse torrent', 500);
+  }
+}
+
+// POST /api/v1/upload/torrent/download — Start multi-file download
+export async function startSeriesDownload(req: Request, res: Response) {
+  try {
+    const { torrentId, title, description, rating, selectedFiles, transcode: transStr } = req.body;
+    const transcode = transStr === 'true' || transStr === true;
+
+    if (!torrentId || !title) {
+      return sendError(res, 'VALIDATION', 'torrentId and title are required');
+    }
+
+    const parsed = parsedTorrents.get(torrentId);
+    if (!parsed) {
+      return sendError(res, 'NOT_FOUND', 'Torrent session expired. Please parse again.', 404);
+    }
+
+    // Determine which file indices to download
+    const selected: number[] = selectedFiles || parsed.files.filter((f: any) => f.isVideo).map((f: any) => f.index);
+    const selectedFileInfos = selected.map((idx: number) => parsed.files[idx]).filter(Boolean);
+
+    if (selectedFileInfos.length === 0) {
+      return sendError(res, 'VALIDATION', 'No files selected');
+    }
+
+    const isSeries = selectedFileInfos.length > 1;
+
+    // Build episode list from filenames
+    const episodes = selectedFileInfos.map((f: any, i: number) => {
+      const info = parseEpisodeInfo(f.name);
+      return {
+        episodeNumber: info.episode || i + 1,
+        title: info.title || `Episode ${i + 1}`,
+        description: '',
+        duration: 0,
+        hlsUrl: '',
+        thumbnailUrl: '',
+      };
+    }).sort((a: any, b: any) => a.episodeNumber - b.episodeNumber);
+
+    // Create content document
+    const content = await Content.create({
+      type: isSeries ? 'series' : 'movie',
+      title,
+      description: description || '',
+      rating: rating || 'U',
+      status: 'downloading',
+      seasons: isSeries ? [{ seasonNumber: 1, title: 'Season 1', episodes }] : [],
+      torrent: { downloadProgress: 0, downloadSpeed: 0, fileSize: 0, errorMessage: '' },
+    });
+
+    const contentId = content._id.toString();
+
+    // Clean up parsed cache
+    clearTimeout(parsed.timer);
+    parsedTorrents.delete(torrentId);
+
+    // Enqueue job for the torrent worker
+    await enqueueJob('torrent-download', contentId, {
+      torrentSource: parsed.source,
+      selectedIndices: selected,
+      transcode,
+      isSeries,
+    });
+
+    console.log(`📥 Series download enqueued: ${contentId} — ${selectedFileInfos.length} files`);
+
+    return sendSuccess(res, {
+      contentId,
+      message: `Download enqueued for ${selectedFileInfos.length} file(s).`,
+      status: 'downloading',
+    }, 'Download started', 201);
+  } catch (error) {
+    console.error('startSeriesDownload error:', error);
+    return sendError(res, 'SERVER_ERROR', 'Failed to start download', 500);
+  }
 }
 
 // POST /api/v1/upload/torrent
@@ -320,18 +219,9 @@ export async function uploadTorrent(req: Request, res: Response) {
       return sendError(res, 'VALIDATION', 'Title is required');
     }
 
-    // Check concurrency limit
-    if (activeTorrents.size >= config.torrentMaxConcurrent) {
-      // Clean up uploaded file
-      if (req.file.path && fs.existsSync(req.file.path)) {
-        fs.unlinkSync(req.file.path);
-      }
-      return sendError(res, 'BUSY', 'Another torrent download is already in progress. Please wait.', 429);
-    }
-
     console.log(`\n📥 Torrent upload received: ${req.file.originalname}`);
 
-    // Pre-validate: parse .torrent and check for video files
+    // Pre-validate
     try {
       const torrentBuffer = fs.readFileSync(req.file.path);
       const parsed = parseTorrent(torrentBuffer) as any;
@@ -340,49 +230,80 @@ export async function uploadTorrent(req: Request, res: Response) {
       );
       if (videoFiles.length === 0) {
         fs.unlinkSync(req.file.path);
-        return sendError(res, 'VALIDATION', 'Torrent contains no video files. Only torrents with video content (.mp4, .mkv, .avi, .mov, .webm) are allowed.', 400);
+        return sendError(res, 'VALIDATION', 'Torrent contains no video files.', 400);
       }
       const largest = videoFiles.sort((a: any, b: any) => (b.length || 0) - (a.length || 0))[0];
       console.log(`📋 Torrent validated: ${videoFiles.length} video file(s), largest: ${largest.name || largest.path} (${((largest.length || 0) / 1024 / 1024).toFixed(1)} MB)`);
     } catch (parseErr: any) {
-      // If parse fails, allow download to proceed — engine will validate later
       console.warn(`⚠️ Could not pre-validate torrent: ${parseErr.message}`);
     }
 
-    // Create content document
     const content = await Content.create({
-      type: type || 'movie',
-      title,
-      description: description || '',
-      rating: rating || 'U',
+      type: type || 'movie', title, description: description || '', rating: rating || 'U',
       status: 'downloading',
-      torrent: {
-        downloadProgress: 0,
-        downloadSpeed: 0,
-        fileSize: 0,
-        errorMessage: '',
-      },
+      torrent: { downloadProgress: 0, downloadSpeed: 0, fileSize: 0, errorMessage: '' },
     });
 
     const contentId = content._id.toString();
-
-    // Move torrent file to torrents dir
     const torrentDir = path.join(TORRENTS_DIR, contentId);
     fs.mkdirSync(torrentDir, { recursive: true });
     const torrentFilePath = path.join(torrentDir, 'source.torrent');
     fs.renameSync(req.file.path, torrentFilePath);
 
-    // Start download in background (fire-and-forget)
-    startTorrentDownload(contentId, torrentFilePath, transcode);
+    // Enqueue job for the torrent worker
+    await enqueueJob('torrent-download', contentId, {
+      torrentSource: torrentFilePath,
+      selectedIndices: [],
+      transcode,
+      isSeries: false,
+    });
 
     return sendSuccess(res, {
-      contentId,
-      message: 'Torrent received, download started.',
-      status: 'downloading',
+      contentId, message: 'Torrent received, download enqueued.', status: 'downloading',
     }, 'Torrent upload started', 201);
   } catch (error) {
     console.error('uploadTorrent error:', error);
     return sendError(res, 'SERVER_ERROR', 'Torrent upload failed', 500);
+  }
+}
+
+// POST /api/v1/upload/magnet
+export async function uploadMagnet(req: Request, res: Response) {
+  try {
+    const { magnetLink, title, description, type, rating } = req.body;
+    const transcode = req.body.transcode === 'true' || req.body.transcode === true;
+
+    if (!magnetLink || !magnetLink.startsWith('magnet:')) {
+      return sendError(res, 'VALIDATION', 'A valid magnet link is required');
+    }
+    if (!title) {
+      return sendError(res, 'VALIDATION', 'Title is required');
+    }
+
+    console.log(`\n🧲 Magnet link received: ${magnetLink.substring(0, 60)}...`);
+
+    const content = await Content.create({
+      type: type || 'movie', title, description: description || '', rating: rating || 'U',
+      status: 'downloading',
+      torrent: { downloadProgress: 0, downloadSpeed: 0, fileSize: 0, errorMessage: '' },
+    });
+
+    const contentId = content._id.toString();
+
+    // Enqueue job for the torrent worker
+    await enqueueJob('torrent-download', contentId, {
+      torrentSource: magnetLink,
+      selectedIndices: [],
+      transcode,
+      isSeries: false,
+    });
+
+    return sendSuccess(res, {
+      contentId, message: 'Magnet download enqueued.', status: 'downloading',
+    }, 'Magnet download started', 201);
+  } catch (error) {
+    console.error('uploadMagnet error:', error);
+    return sendError(res, 'SERVER_ERROR', 'Magnet download failed', 500);
   }
 }
 
@@ -400,22 +321,14 @@ export async function cancelTorrent(req: Request, res: Response) {
       return sendError(res, 'VALIDATION', `Cannot cancel — status is "${content.status}"`, 400);
     }
 
-    // Destroy the torrent engine if active
-    const engine = activeTorrents.get(contentId);
-    if (engine) {
-      try { engine.destroy(() => {}); } catch {}
-      activeTorrents.delete(contentId);
-    }
+    // Cancel the job in the queue (worker will pick up the cancellation)
+    await cancelJob(contentId);
 
     // Clean up files on disk
     const torrentDir = path.join(TORRENTS_DIR, contentId);
-    if (fs.existsSync(torrentDir)) {
-      deleteLocalDirectory(torrentDir);
-    }
+    if (fs.existsSync(torrentDir)) deleteLocalDirectory(torrentDir);
     const uploadDir = path.join(UPLOADS_DIR, contentId);
-    if (fs.existsSync(uploadDir)) {
-      deleteLocalDirectory(uploadDir);
-    }
+    if (fs.existsSync(uploadDir)) deleteLocalDirectory(uploadDir);
 
     // Delete the content doc entirely
     await Content.findByIdAndDelete(contentId);
@@ -448,9 +361,4 @@ export async function getActivity(_req: Request, res: Response) {
     console.error('getActivity error:', error);
     return sendError(res, 'SERVER_ERROR', 'Failed to get activity', 500);
   }
-}
-
-// Cleanup function for server shutdown / restart
-export function getActiveTorrentCount(): number {
-  return activeTorrents.size;
 }

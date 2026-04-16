@@ -1,0 +1,17 @@
+{
+  "name": "torrent-worker",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/torrent-worker/src",
+  "projectType": "application",
+  "targets": {
+    "serve": {
+      "command": "tsx watch apps/torrent-worker/src/main.ts",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "build": {
+      "command": "tsc -p apps/torrent-worker/tsconfig.app.json"
+    }
+  }
+}

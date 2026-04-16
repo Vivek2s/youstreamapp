@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "../../dist/apps/transcoder-worker"
+  },
+  "include": ["src/**/*.ts", "../api/src/**/*.ts"],
+  "references": [
+    { "path": "./tsconfig.app.json" }
+  ]
+}

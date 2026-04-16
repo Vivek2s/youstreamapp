@@ -1,20 +1,14 @@
 import app from './app';
 import { connectDatabase } from './database/connection';
 import { config } from './config';
-import { Content } from './models/content.model';
 
 async function bootstrap() {
   // Connect to MongoDB
   await connectDatabase();
 
-  // Clean up any torrent downloads interrupted by previous restart
-  const interrupted = await Content.updateMany(
-    { status: 'downloading' },
-    { $set: { status: 'error', 'torrent.errorMessage': 'Download interrupted by server restart' } }
-  );
-  if (interrupted.modifiedCount > 0) {
-    console.log(`⚠️  Marked ${interrupted.modifiedCount} interrupted torrent download(s) as error`);
-  }
+  // Note: torrent downloads and transcoding are handled by separate worker processes.
+  // If those workers restart, BullMQ-style job recovery re-claims stale jobs automatically.
+  // No cleanup hack needed here — the API server can restart freely.
 
   // Start server
   app.listen(config.port, '0.0.0.0', () => {

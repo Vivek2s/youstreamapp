@@ -32,6 +32,6 @@ export const config = {
   cloudfrontDomain: process.env.CLOUDFRONT_DOMAIN || 'https://cdn.yourdomain.com',
 
   // Torrent
-  torrentMaxConcurrent: parseInt(process.env.TORRENT_MAX_CONCURRENT || '1', 10),
-  torrentStallTimeoutMs: parseInt(process.env.TORRENT_STALL_TIMEOUT_MS || '300000', 10),
+  torrentMaxConcurrent: parseInt(process.env.TORRENT_MAX_CONCURRENT || '3', 10),
+  torrentStallTimeoutMs: parseInt(process.env.TORRENT_STALL_TIMEOUT_MS || '86400000', 10), // 24 hours
 };

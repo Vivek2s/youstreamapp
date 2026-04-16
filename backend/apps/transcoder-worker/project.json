@@ -1,0 +1,17 @@
+{
+  "name": "transcoder-worker",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/transcoder-worker/src",
+  "projectType": "application",
+  "targets": {
+    "serve": {
+      "command": "tsx watch apps/transcoder-worker/src/main.ts",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "build": {
+      "command": "tsc -p apps/transcoder-worker/tsconfig.app.json"
+    }
+  }
+}

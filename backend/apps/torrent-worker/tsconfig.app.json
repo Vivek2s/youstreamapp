@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../dist/apps/torrent-worker",
+    "rootDir": "../../apps",
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["src/**/*.ts", "../api/src/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"]
+}

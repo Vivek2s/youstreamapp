@@ -6,13 +6,11 @@ services:
     ports:
       - "3000:3000"
     env_file:
-      - .env
+      - .env.production
     environment:
       - STORAGE_ROOT=/app/storage
     volumes:
-      - ./storage:/app/storage
-    depends_on:
-      - mongo
+      - storage:/app/storage
     restart: unless-stopped
 
   torrent-worker:
@@ -21,13 +19,11 @@ services:
       dockerfile: Dockerfile.worker
     command: ["node", "dist/apps/torrent-worker/torrent-worker/src/main.js"]
     env_file:
-      - .env
+      - .env.production
     environment:
       - STORAGE_ROOT=/app/storage
     volumes:
-      - ./storage:/app/storage
-    depends_on:
-      - mongo
+      - storage:/app/storage
     restart: unless-stopped
 
   transcoder-worker:
@@ -36,35 +32,13 @@ services:
       dockerfile: Dockerfile.worker
     command: ["node", "dist/apps/transcoder-worker/transcoder-worker/src/main.js"]
     env_file:
-      - .env
+      - .env.production
     environment:
       - STORAGE_ROOT=/app/storage
       - TRANSCODE_MAX_CONCURRENT=1
     volumes:
-      - ./storage:/app/storage
-    depends_on:
-      - mongo
+      - storage:/app/storage
     restart: unless-stopped
 
-  mongo:
-    image: mongo:7
-    ports:
-      - "27018:27017"
-    volumes:
-      - mongodata:/data/db
-    command: ["mongod", "--replSet", "rs0"]
-
-  # MongoDB requires a replica set for Change Streams
-  mongo-init:
-    image: mongo:7
-    depends_on:
-      - mongo
-    restart: "no"
-    entrypoint: >
-      mongosh --host mongo:27017 --eval '
-        try { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongo:27017" }] }); }
-        catch(e) { if (e.codeName !== "AlreadyInitialized") throw e; }
-      '
-
 volumes:
-  mongodata:
+  storage:
