@@ -7,6 +7,7 @@ export interface IEpisode {
   duration: number;
   hlsUrl: string;
   thumbnailUrl: string;
+  subtitles: { lang: string; url: string }[];
 }
 
 export interface ISeason {
@@ -27,10 +28,12 @@ export interface IContent extends Document {
   rating: string;
   posterUrl: string;
   backdropUrl: string;
+  thumbnailUrl: string;
   trailerUrl: string;
   rawUrl: string;
   streaming: {
     hlsUrl: string;
+    spriteVttUrl: string;
     subtitles: { lang: string; url: string }[];
   };
   seasons: ISeason[];
@@ -55,6 +58,7 @@ const episodeSchema = new Schema<IEpisode>({
   duration: { type: Number, default: 0 },
   hlsUrl: { type: String, default: '' },
   thumbnailUrl: { type: String, default: '' },
+  subtitles: [{ lang: String, url: String }],
 });
 
 const seasonSchema = new Schema<ISeason>({
@@ -76,10 +80,12 @@ const contentSchema = new Schema<IContent>(
     rating: { type: String, default: 'U' },
     posterUrl: { type: String, default: '' },
     backdropUrl: { type: String, default: '' },
+    thumbnailUrl: { type: String, default: '' },
     trailerUrl: { type: String, default: '' },
     rawUrl: { type: String, default: '' },
     streaming: {
       hlsUrl: { type: String, default: '' },
+      spriteVttUrl: { type: String, default: '' },
       subtitles: [{ lang: String, url: String }],
     },
     seasons: [seasonSchema],

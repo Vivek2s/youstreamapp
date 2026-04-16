@@ -29,6 +29,14 @@ export async function getStreamUrl(req: AuthRequest, res: Response) {
       const rawPath = content.rawUrl;
       streamUrl = rawPath.startsWith('http') ? rawPath : `http://127.0.0.1:${config.port}${rawPath}`;
       streamType = 'raw';
+    } else if (content.type === 'series' && content.seasons?.length > 0) {
+      // For series without a main stream, use the first episode's URL
+      const firstEp = content.seasons[0]?.episodes?.[0];
+      if (firstEp?.hlsUrl) {
+        const epPath = firstEp.hlsUrl;
+        streamUrl = epPath.startsWith('http') ? epPath : `http://127.0.0.1:${config.port}${epPath}`;
+        streamType = epPath.includes('.m3u8') ? 'hls' : 'raw';
+      }
     }
 
     if (!streamUrl) {
@@ -42,7 +50,9 @@ export async function getStreamUrl(req: AuthRequest, res: Response) {
       hlsUrl: streamUrl,
       streamType,
       subtitles: content.streaming.subtitles,
+      spriteVttUrl: content.streaming.spriteVttUrl || '',
       duration: content.duration,
+      durationSeconds: content.duration || 0,
       isPortrait: content.isPortrait || false,
     });
   } catch (error) {

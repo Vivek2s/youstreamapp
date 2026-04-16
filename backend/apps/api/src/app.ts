@@ -18,7 +18,7 @@ app.use(
   '/api/',
   rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 200,
+    max: 1000,
     message: { success: false, error: { code: 'RATE_LIMIT', message: 'Too many requests' } },
   })
 );

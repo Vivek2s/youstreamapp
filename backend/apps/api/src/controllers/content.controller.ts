@@ -118,7 +118,7 @@ export async function getHomeRows(req: Request, res: Response) {
           categories: cat._id,
           status: 'published',
         })
-          .select('title posterUrl backdropUrl type duration rating releaseYear')
+          .select('title posterUrl backdropUrl thumbnailUrl type duration rating releaseYear')
           .limit(15);
 
         return { category: { id: cat._id, name: cat.name, slug: cat.slug }, contents };
@@ -127,7 +127,7 @@ export async function getHomeRows(req: Request, res: Response) {
 
     // Also add "All Content" row if no categories have content yet
     const allContent = await Content.find({ status: 'published' })
-      .select('title posterUrl backdropUrl type duration rating releaseYear genres')
+      .select('title posterUrl backdropUrl thumbnailUrl type duration rating releaseYear genres')
       .populate('genres', 'name slug')
       .sort({ createdAt: -1 })
       .limit(20);
