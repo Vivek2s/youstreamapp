@@ -1,8 +1,6 @@
 services:
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
+    image: youstream-api:latest
     ports:
       - "3000:3000"
     env_file:
@@ -10,26 +8,22 @@ services:
     environment:
       - STORAGE_ROOT=/app/storage
     volumes:
-      - storage:/app/storage
+      - /home/ec2-user/storage:/app/storage
     restart: unless-stopped
 
   torrent-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.worker
+    image: youstream-worker:latest
     command: ["node", "dist/apps/torrent-worker/torrent-worker/src/main.js"]
     env_file:
       - .env.production
     environment:
       - STORAGE_ROOT=/app/storage
     volumes:
-      - storage:/app/storage
+      - /home/ec2-user/storage:/app/storage
     restart: unless-stopped
 
   transcoder-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.worker
+    image: youstream-worker:latest
     command: ["node", "dist/apps/transcoder-worker/transcoder-worker/src/main.js"]
     env_file:
       - .env.production
@@ -37,8 +31,5 @@ services:
       - STORAGE_ROOT=/app/storage
       - TRANSCODE_MAX_CONCURRENT=1
     volumes:
-      - storage:/app/storage
+      - /home/ec2-user/storage:/app/storage
     restart: unless-stopped
-
-volumes:
-  storage:
