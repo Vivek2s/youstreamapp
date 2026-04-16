@@ -1,39 +1,52 @@
 # YouStream — AWS Deployment Guide
 
-> **Status**: LIVE — Deployed and verified on 2026-04-12
+> **Status**: LIVE — Multi-service deployment on 2026-04-16
 
 ## Architecture
 
 ```
+                          Internet
+                             │
+                    ┌────────┴────────┐
+                    │                 │
+           ┌───────▼────────┐  ┌─────▼──────────────────┐
+           │  EC2 t3.small  │  │  CloudFront CDN         │
+           │  13.200.190.1  │  │  d1xzgwjb57w3t7        │
+           │                │  │  .cloudfront.net        │
+           │  3 containers: │  │  *.m3u8 → 60s cache     │
+           │  ┌───────────┐ │  │  *.ts   → 86400s cache  │
+           │  │ API :3000 │ │  └─────┬──────────────────┘
+           │  │ Express   │ │        │
+           │  │ Auth/CRUD │ │  ┌─────▼──────────────────┐
+           │  └─────┬─────┘ │  │  S3: youstream-streaming│
+           │        │enqueue│  │  (private, OAC only)     │
+           │  ┌─────▼─────┐ │  └─────────────────────────┘
+           │  │  MongoDB  │ │
+           │  │  Job Queue│ │
+           │  └──┬─────┬──┘ │
+           │     │     │    │
+           │  ┌──▼──┐┌─▼──┐│
+           │  │Torr-││Trans││
+           │  │ent  ││code ││
+           │  │Work-││Work-││
+           │  │er   ││er   ││
+           │  └─────┘└─────┘│
+           └───────┬────────┘
+                   │
+          ┌────────▼───────────────┐
+          │  MongoDB Atlas M0      │
+          │  cluster0.dvigj1i      │
+          │  .mongodb.net          │
+          │  - content collection  │
+          │  - jobs collection     │
+          └────────────────────────┘
+
 Upload Flow:
-  Mobile App → API (EC2) → FFmpeg transcode → Upload HLS to S3 → CloudFront URL saved to MongoDB
+  Mobile App → API → enqueue job → Torrent Worker downloads →
+  Transcoder Worker (FFmpeg HLS) → S3 upload → CloudFront URL in MongoDB
 
-Streaming Flow:
-  Mobile App → API (get stream URL) → CloudFront CDN → S3 bucket
-  (Edge-cached delivery, zero load on API server)
-
-                    Internet
-                       │
-              ┌────────┴────────┐
-              │                 │
-     ┌────────▼───────┐  ┌─────▼──────────────────┐
-     │  EC2 (API)     │  │  CloudFront CDN         │
-     │  t3.small      │  │  d1xzgwjb57w3t7        │
-     │  13.200.190.1  │  │  .cloudfront.net        │
-     │  :3000         │  │  *.m3u8 → 60s cache     │
-     │  - REST API    │  │  *.ts   → 86400s cache  │
-     │  - Auth/JWT    │  └─────┬──────────────────┘
-     │  - FFmpeg      │        │
-     │  - S3 upload   │  ┌─────▼──────────────────┐
-     └────────┬───────┘  │  S3: youstream-streaming│
-              │          │  (private, OAC only)     │
-              │          └─────────────────────────┘
-     ┌────────▼───────────────┐
-     │  MongoDB Atlas M0      │
-     │  cluster0.dvigj1i      │
-     │  .mongodb.net          │
-     │  Network: 0.0.0.0/0    │
-     └────────────────────────┘
+Key: API restart does NOT affect active downloads or transcoding.
+     Workers auto-recover stale jobs on restart.
 ```
 
 ---
@@ -46,7 +59,7 @@ Streaming Flow:
 | **Health Check** | `http://13.200.190.1:3000/health` |
 | **CDN URL** | `https://d1xzgwjb57w3t7.cloudfront.net` |
 | **SSH** | `ssh -i ~/.ssh/youstream-key.pem ec2-user@13.200.190.1` |
-| **Logs** | `docker logs -f youstream-api` (via SSH) |
+| **Logs** | `docker compose -f docker-compose.prod.yml logs -f` (via SSH) |
 | **AWS Profile** | `--profile youstream` |
 | **AWS Region** | ap-south-1 (Mumbai) |
 | **AWS Account** | 193116636728 (IAM user: admin) |
@@ -156,7 +169,8 @@ Streaming Flow:
 | **Security Group** | sg-0a5fe8346db4ed582 (youstream-sg) |
 | **Key Pair** | youstream-key (`~/.ssh/youstream-key.pem`) |
 | **Docker** | v25.0.14 |
-| **Container** | youstream-api (--restart unless-stopped) |
+| **Docker Compose** | v5.1.3 |
+| **Containers** | api + torrent-worker + transcoder-worker (--restart unless-stopped) |
 
 ### Security Group Rules (Inbound)
 
@@ -175,27 +189,39 @@ ssh -i ~/.ssh/youstream-key.pem ec2-user@13.200.190.1
 ### Files on EC2
 ```
 /home/ec2-user/
-├── .env.production          ← Production env vars (chmod 600)
-├── backend/                 ← Source code + Dockerfile (used for docker build)
-│   ├── Dockerfile
-│   ├── apps/api/
-│   ├── package.json
-│   └── ...
-└── storage/                 ← Docker volume mount for temp transcoding
-    ├── uploads/             ← Raw files during transcode (deleted after S3 upload)
-    └── streams/             ← HLS output during transcode (deleted after S3 upload)
+├── .env.production              ← Production env vars (chmod 600)
+├── docker-compose.prod.yml      ← Docker Compose for all 3 services
+├── youstream/                   ← Git repo (used for docker build)
+│   └── backend/
+│       ├── Dockerfile.api       ← Slim API image (no FFmpeg)
+│       ├── Dockerfile.worker    ← Worker image (with FFmpeg)
+│       ├── apps/api/
+│       ├── apps/torrent-worker/
+│       ├── apps/transcoder-worker/
+│       └── ...
+└── storage/                     ← Shared Docker volume mount
+    ├── uploads/                 ← Raw files during transcode
+    ├── streams/                 ← HLS output during transcode
+    └── torrents/                ← Torrent download temp files
 ```
 
-### Docker Container Config
-```bash
-docker run -d \
-  --name youstream-api \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v /home/ec2-user/storage:/app/storage \
-  --env-file /home/ec2-user/.env.production \
-  youstream-api:latest
+### Docker Compose Services (3 containers)
+```yaml
+# docker-compose.prod.yml
+services:
+  api:                    # Express server — auth, CRUD, enqueue jobs
+    image: youstream-api:latest
+    ports: ["3000:3000"]
+
+  torrent-worker:         # Downloads torrents, enqueues transcode jobs
+    image: youstream-worker:latest
+    command: ["node", "dist/apps/torrent-worker/torrent-worker/src/main.js"]
+
+  transcoder-worker:      # FFmpeg HLS encoding, thumbnails, sprites
+    image: youstream-worker:latest
+    command: ["node", "dist/apps/transcoder-worker/transcoder-worker/src/main.js"]
 ```
+All share: `/home/ec2-user/storage` volume, `.env.production`, MongoDB Atlas.
 
 ---
 
@@ -228,52 +254,100 @@ Controls the entire streaming pipeline:
 | AWS_S3_RAW_BUCKET | ott-raw | youstream-raw | Raw upload bucket |
 | AWS_S3_STREAMING_BUCKET | ott-streaming | youstream-streaming | HLS output bucket |
 | CLOUDFRONT_DOMAIN | cdn.yourdomain.com | https://d1xzgwjb57w3t7.cloudfront.net | CDN base URL |
+| TORRENT_MAX_CONCURRENT | 3 | 3 | Max parallel torrent downloads |
+| TORRENT_STALL_TIMEOUT_MS | 86400000 | 86400000 | 24 hours — how long to wait for stalled torrent |
+| TRANSCODE_MAX_CONCURRENT | 1 | 1 | Max parallel FFmpeg transcodes (worker env var) |
 
 ---
 
 ## Deployment
 
-### Option A: Build on EC2 (current method, no local Docker needed)
+### Quick Deploy (build on EC2 — recommended)
 
 ```bash
-# 1. Create tarball (from project root)
-tar czf /tmp/youstream-backend.tar.gz \
-  --exclude='backend/node_modules' \
-  --exclude='backend/dist' \
-  --exclude='backend/storage' \
-  --exclude='backend/.env' \
-  --exclude='backend/.nx' \
-  backend/
-
-# 2. Upload to EC2
-scp -i ~/.ssh/youstream-key.pem /tmp/youstream-backend.tar.gz ec2-user@13.200.190.1:/tmp/
-
-# 3. SSH in and build + restart
+# SSH into EC2
 ssh -i ~/.ssh/youstream-key.pem ec2-user@13.200.190.1
-cd /home/ec2-user
-rm -rf backend
-tar xzf /tmp/youstream-backend.tar.gz && rm /tmp/youstream-backend.tar.gz
+
+# Pull latest code
+cd ~/youstream && git pull
+
+# Build both images
 cd backend
-docker build -t youstream-api:latest .
-docker stop youstream-api && docker rm youstream-api
-docker run -d --name youstream-api --restart unless-stopped \
-  -p 3000:3000 \
-  -v /home/ec2-user/storage:/app/storage \
-  --env-file /home/ec2-user/.env.production \
-  youstream-api:latest
+docker build -t youstream-api:latest -f Dockerfile.api .
+docker build -t youstream-worker:latest -f Dockerfile.worker .
+
+# Copy compose file and restart all services
+cp docker-compose.prod.yml ~/docker-compose.prod.yml
+cd ~
+docker compose -f docker-compose.prod.yml up -d
+
+# Verify
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs --tail 10
 ```
 
-### Option B: Deploy Script (requires local Docker Desktop running)
+### Deploy Script (builds locally, SCPs to EC2 — requires Docker Desktop)
 ```bash
 cd backend
-EC2_HOST=13.200.190.1 EC2_KEY=~/.ssh/youstream-key.pem ./scripts/deploy.sh
+EC2_HOST=13.200.190.1 EC2_KEY=~/.ssh/youstream-key.pem bash scripts/deploy.sh
 ```
-Builds Docker image locally, SCPs the image tarball to EC2, loads and runs it.
+Builds API + Worker images locally, SCPs both tarballs + compose file to EC2, loads and runs.
 
-### Option C: GitHub Actions (automatic on push to main)
+### Deploy Only API (without affecting workers)
+```bash
+# Restart API only — active downloads and transcoding continue uninterrupted
+ssh -i ~/.ssh/youstream-key.pem ec2-user@13.200.190.1
+cd ~/youstream && git pull
+cd backend && docker build -t youstream-api:latest -f Dockerfile.api .
+cd ~ && docker compose -f docker-compose.prod.yml up -d api
+```
+
+### Deploy Only Workers (without affecting API)
+```bash
+ssh -i ~/.ssh/youstream-key.pem ec2-user@13.200.190.1
+cd ~/youstream && git pull
+cd backend && docker build -t youstream-worker:latest -f Dockerfile.worker .
+cd ~ && docker compose -f docker-compose.prod.yml up -d torrent-worker transcoder-worker
+```
+
+### Docker Commands on EC2 (via SSH)
+```bash
+# View all running services
+docker compose -f docker-compose.prod.yml ps
+
+# View logs (all services, live)
+docker compose -f docker-compose.prod.yml logs -f
+
+# View logs for specific service
+docker compose -f docker-compose.prod.yml logs -f api
+docker compose -f docker-compose.prod.yml logs -f torrent-worker
+docker compose -f docker-compose.prod.yml logs -f transcoder-worker
+
+# Restart a single service (e.g. API only — workers unaffected)
+docker compose -f docker-compose.prod.yml restart api
+
+# Restart all services
+docker compose -f docker-compose.prod.yml restart
+
+# Stop everything
+docker compose -f docker-compose.prod.yml down
+
+# Rebuild and restart everything
+docker compose -f docker-compose.prod.yml up -d --build
+
+# Shell into a container (debugging)
+docker compose -f docker-compose.prod.yml exec api sh
+docker compose -f docker-compose.prod.yml exec torrent-worker sh
+
+# Check disk usage
+docker system df
+```
+
+### GitHub Actions (automatic on push to main)
 1. Create ECR repository (one-time):
    ```bash
    aws ecr create-repository --repository-name youstream-api --region ap-south-1 --profile youstream
+   aws ecr create-repository --repository-name youstream-worker --region ap-south-1 --profile youstream
    ```
 2. Add GitHub Secrets to repo:
    - `AWS_ACCESS_KEY_ID` = AKIASZ5VGAY4KPMDZZ7I
@@ -281,38 +355,6 @@ Builds Docker image locally, SCPs the image tarball to EC2, loads and runs it.
    - `EC2_HOST` = 13.200.190.1
    - `EC2_SSH_KEY` = contents of `~/.ssh/youstream-key.pem`
 3. Push to `main` branch with changes in `backend/` — workflow at `.github/workflows/deploy.yml` triggers automatically
-
-### Docker Commands on EC2 (via SSH)
-```bash
-# View running container
-docker ps
-
-# View logs (live)
-docker logs -f youstream-api
-
-# View last 50 lines of logs
-docker logs --tail 50 youstream-api
-
-# Restart container
-docker restart youstream-api
-
-# Stop container
-docker stop youstream-api
-
-# Full redeploy (stop, remove, start fresh)
-docker stop youstream-api && docker rm youstream-api
-docker run -d --name youstream-api --restart unless-stopped \
-  -p 3000:3000 \
-  -v /home/ec2-user/storage:/app/storage \
-  --env-file /home/ec2-user/.env.production \
-  youstream-api:latest
-
-# Shell into running container (debugging)
-docker exec -it youstream-api sh
-
-# Check disk usage
-docker system df
-```
 
 ---
 
@@ -366,20 +408,22 @@ GET  /api/v1/upload/status/:contentId     → Check transcode status
 
 ---
 
-## Dockerfile
+## Dockerfiles
 
-**Path**: `backend/Dockerfile`
+### Dockerfile.api (slim — no FFmpeg)
+- Multi-stage build: `node:20-slim` builder + `node:20-slim` runtime
+- Builds only the API via `npx nx build api`
+- Entry point: `dist/apps/api/main.js`
+- No FFmpeg — all transcoding/torrent logic runs in workers
 
-Multi-stage build:
-1. **Build stage** (`node:20-slim`): installs all deps, runs `npx nx build api` which compiles TypeScript via `tsc`
-2. **Runtime stage** (`node:20-slim`): installs FFmpeg via apt, copies production deps + compiled `dist/`
+### Dockerfile.worker (full — with FFmpeg)
+- Multi-stage build: `node:20-slim` builder + `node:20-slim` + FFmpeg runtime
+- Builds both workers via `npx nx build torrent-worker` + `npx nx build transcoder-worker`
+- Entry point overridden by docker-compose `command` to select which worker to run
+- Torrent worker: `dist/apps/torrent-worker/torrent-worker/src/main.js`
+- Transcoder worker: `dist/apps/transcoder-worker/transcoder-worker/src/main.js`
 
-**Important**: The Nx/tsc build strips the `src/` directory level. Source `apps/api/src/main.ts` compiles to `dist/apps/api/main.js` (not `dist/apps/api/src/main.js`). The CMD is:
-```dockerfile
-CMD ["node", "dist/apps/api/main.js"]
-```
-
-The `__dirname` relative paths in config resolve to `/app/` (project root inside container), but are overridden by environment variables (`STORAGE_ROOT`, `MONGO_URI`, etc.) so this is not an issue.
+**Note**: Workers include `../api/src/**/*.ts` in their build (for shared models/config/utils), so the output path includes the app name subdirectory.
 
 ---
 
@@ -436,17 +480,42 @@ The `__dirname` relative paths in config resolve to `/app/` (project root inside
 
 ### Container keeps restarting
 ```bash
-docker logs youstream-api  # Check error
+docker compose -f docker-compose.prod.yml logs api            # API logs
+docker compose -f docker-compose.prod.yml logs torrent-worker  # Torrent logs
+docker compose -f docker-compose.prod.yml logs transcoder-worker # Transcoder logs
 ```
 Common causes:
 - MongoDB Atlas IP not whitelisted → Add 0.0.0.0/0 in Atlas Network Access
 - Wrong .env.production values → Check `/home/ec2-user/.env.production`
-- Build path issue → Entry point is `dist/apps/api/main.js` (no `src/` in path)
+- Build path issue → Worker entry points include subdirectory (see Dockerfiles section)
 
 ### Can't connect to API from outside
 - Check security group allows port 3000 inbound
-- Check container is running: `docker ps`
+- Check container is running: `docker compose -f docker-compose.prod.yml ps`
 - Check Elastic IP is associated: `aws ec2 describe-addresses --profile youstream`
+
+### Torrent download stuck / not starting
+- Check torrent-worker is running: `docker compose -f docker-compose.prod.yml ps torrent-worker`
+- Check worker logs: `docker compose -f docker-compose.prod.yml logs -f torrent-worker`
+- Check jobs collection in MongoDB for pending/stale jobs
+- Worker uses Change Streams (Atlas) — if it shows "polling mode", that's fine too
+
+### Transcode not starting after download completes
+- Torrent worker enqueues a transcode job on completion
+- Check transcoder-worker logs: `docker compose -f docker-compose.prod.yml logs -f transcoder-worker`
+- Check jobs collection for `type: 'transcode'` with `status: 'pending'`
+
+### API restart — do downloads survive?
+- Yes. Restart API without affecting workers:
+  ```bash
+  docker compose -f docker-compose.prod.yml restart api
+  ```
+- Workers are separate containers, unaffected by API restart
+- No cleanup hack — API no longer marks downloads as error on boot
+
+### Worker restart — does download resume?
+- Torrent worker: stale jobs auto-recovered (heartbeat > 2 min). torrent-stream with `verify: true` skips already-downloaded pieces, so a 70% download resumes from ~70%.
+- Transcoder worker: stale jobs re-queued. FFmpeg restarts from scratch (no partial HLS resume), but the input file persists on the shared volume.
 
 ### CloudFront returns 403
 - Check S3 bucket policy grants access to the distribution
