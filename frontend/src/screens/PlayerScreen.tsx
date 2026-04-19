@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, StatusBar, NativeModules, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, StatusBar, NativeModules, Platform, TVEventHandler } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { WebView as WebViewType } from 'react-native-webview';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -17,12 +17,13 @@ type Props = {
 };
 
 export default function PlayerScreen({ navigation, route }: Props) {
-  const { contentId, title } = route.params;
+  const { contentId, title, episodeUrl, episodeSubs } = route.params;
   const webViewRef = useRef<WebViewType>(null);
 
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [streamType, setStreamType] = useState<'hls' | 'raw'>('raw');
   const [subtitles, setSubtitles] = useState<{ lang: string; url: string }[]>([]);
+  const [spriteVttUrl, setSpriteVttUrl] = useState('');
   const [isPortrait, setIsPortrait] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -34,17 +35,19 @@ export default function PlayerScreen({ navigation, route }: Props) {
     }
     loadStreamUrl();
     return () => {
-      // Exit immersive and re-lock to portrait when leaving player
+      // Exit immersive and re-lock to portrait when leaving player (mobile only)
       if (Platform.OS === 'android' && ImmersiveMode) {
         ImmersiveMode.disable();
       }
-      Orientation.lockToPortrait();
+      if (!Platform.isTV) {
+        Orientation.lockToPortrait();
+      }
     };
   }, [contentId]);
 
-  // Lock orientation based on video aspect ratio
+  // Lock orientation based on video aspect ratio (mobile only — TV is always landscape)
   useEffect(() => {
-    if (streamUrl) {
+    if (streamUrl && !Platform.isTV) {
       if (isPortrait) {
         Orientation.lockToPortrait();
       } else {
@@ -55,11 +58,23 @@ export default function PlayerScreen({ navigation, route }: Props) {
 
   const loadStreamUrl = async () => {
     try {
+      if (episodeUrl) {
+        // Direct episode playback — use URL as-is
+        console.log('[Player] Episode URL:', episodeUrl);
+        setStreamUrl(episodeUrl);
+        setStreamType(episodeUrl.includes('.m3u8') ? 'hls' : 'raw');
+        if (episodeSubs && episodeSubs.length > 0) {
+          setSubtitles(episodeSubs);
+        }
+        setLoading(false);
+        return;
+      }
       const data = await contentService.getStreamUrl(contentId);
       console.log('[Player] Stream URL:', data.hlsUrl, 'type:', data.streamType);
       setStreamUrl(data.hlsUrl);
       setStreamType(data.streamType || 'raw');
       setSubtitles(data.subtitles || []);
+      setSpriteVttUrl(data.spriteVttUrl || '');
       setIsPortrait(data.isPortrait || false);
     } catch (err: any) {
       console.log('[Player] Error loading stream:', err.message);
@@ -104,6 +119,8 @@ export default function PlayerScreen({ navigation, route }: Props) {
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  *:focus { outline:none !important; }
+  button:focus, input:focus { outline:none !important; box-shadow:none !important; }
   body { background:#000; width:100vw; height:100vh; overflow:hidden; font-family:-apple-system,sans-serif; }
   video { width:100%; height:100%; object-fit:contain; display:block; }
 
@@ -145,7 +162,9 @@ export default function PlayerScreen({ navigation, route }: Props) {
     background:rgba(0,0,0,0.5); border-radius:50%; border:none; cursor:pointer;
     color:#fff; font-weight:800; backdrop-filter:blur(4px);
     -webkit-backdrop-filter:blur(4px);
+    transition:transform 0.15s ease, background 0.15s ease;
   }
+  .ctrl-btn.pressed { transform:scale(1.25); background:rgba(255,255,255,0.25); }
   .ctrl-btn svg { width:26px; height:26px; }
   .ctrl-btn span { font-size:9px; margin-top:-2px; }
   .play-btn {
@@ -177,12 +196,36 @@ export default function PlayerScreen({ navigation, route }: Props) {
   }
   .progress-fill {
     position:absolute; left:0; height:100%; background:#E50914;
-    border-radius:2px;
+    border-radius:2px; transition:width 0.3s ease;
   }
   .progress-thumb {
     position:absolute; width:14px; height:14px; background:#E50914;
     border-radius:50%; top:50%; transform:translate(-50%,-50%);
-    box-shadow:0 0 4px rgba(0,0,0,0.5); transition:transform 0.1s;
+    box-shadow:0 0 4px rgba(0,0,0,0.5); transition:left 0.3s ease, transform 0.1s;
+  }
+  /* Seek label shown inside button */
+  .ctrl-btn.seek-active { transform:scale(1.15); background:rgba(255,255,255,0.2); }
+  .ctrl-btn.seek-active svg { display:none; }
+  .ctrl-btn.seek-active span { display:none; }
+  .seek-label {
+    display:none; color:#fff; font-size:14px; font-weight:800;
+    text-shadow:0 1px 4px rgba(0,0,0,0.9);
+  }
+  .ctrl-btn.seek-active .seek-label { display:block; }
+  /* Thumbnail preview */
+  .thumb-preview {
+    position:absolute; bottom:32px; left:50%;
+    transform:translateX(-50%);
+    background:#000; border:2px solid rgba(255,255,255,0.7);
+    border-radius:4px; overflow:hidden;
+    display:none; z-index:25; pointer-events:none;
+    box-shadow:0 4px 16px rgba(0,0,0,0.8);
+  }
+  .thumb-preview.show { display:block; }
+  .thumb-preview-time {
+    position:absolute; bottom:-22px; left:50%; transform:translateX(-50%);
+    color:#fff; font-size:12px; font-weight:700; white-space:nowrap;
+    text-shadow:0 1px 4px rgba(0,0,0,0.9);
   }
   .progress-wrap:active .progress-thumb { transform:translate(-50%,-50%) scale(1.3); }
   .seek-input {
@@ -221,7 +264,7 @@ export default function PlayerScreen({ navigation, route }: Props) {
     padding:10px 16px; color:#fff; font-size:14px; font-weight:500;
     cursor:pointer; border:none; background:none; width:100%; text-align:left;
   }
-  .quality-option:active { background:rgba(255,255,255,0.1); }
+  .quality-option:active, .quality-option:focus { background:rgba(255,255,255,0.15); outline:none; }
   .quality-option.active { color:#E50914; font-weight:700; }
   .quality-option .check { font-size:16px; }
   .quality-badge {
@@ -280,6 +323,7 @@ export default function PlayerScreen({ navigation, route }: Props) {
         <path d="M12.5 8.14v-4l-5 5 5 5v-4a4 4 0 110 8 4 4 0 01-4-4"/>
       </svg>
       <span>10</span>
+      <span class="seek-label" id="rwLabel"></span>
     </button>
     <button class="play-btn" id="playBtn">
       <svg id="playIcon" viewBox="0 0 24 24" fill="#fff">
@@ -291,6 +335,7 @@ export default function PlayerScreen({ navigation, route }: Props) {
         <path d="M11.5 8.14v-4l5 5-5 5v-4a4 4 0 100 8 4 4 0 004-4"/>
       </svg>
       <span>10</span>
+      <span class="seek-label" id="ffLabel"></span>
     </button>
   </div>
 
@@ -301,6 +346,9 @@ export default function PlayerScreen({ navigation, route }: Props) {
       </div>
       <div class="progress-thumb" id="progressThumb" style="left:0%"></div>
       <input type="range" class="seek-input" id="seek" min="0" max="1000" value="0" step="1">
+      <div class="thumb-preview" id="thumbPreview">
+        <span class="thumb-preview-time" id="thumbTime"></span>
+      </div>
     </div>
     <div class="time-row">
       <span class="time-text" id="cur">0:00</span>
@@ -324,11 +372,21 @@ var qualityBtn = document.getElementById('qualityBtn');
 var qualityPanel = document.getElementById('qualityPanel');
 var subBtn = document.getElementById('subBtn');
 var subPanel = document.getElementById('subPanel');
+var rwBtn = document.getElementById('rwBtn');
+var ffBtn = document.getElementById('ffBtn');
+var rwLabel = document.getElementById('rwLabel');
+var ffLabel = document.getElementById('ffLabel');
 var hideTimer;
+var seekResetTimer;
 var hls = null;
 var streamType = '${streamType}';
 var streamUrl = '${streamUrl}';
 var subtitles = ${JSON.stringify(subtitles)};
+var spriteVttUrl = '${spriteVttUrl}';
+var thumbPreview = document.getElementById('thumbPreview');
+var thumbTime = document.getElementById('thumbTime');
+var spriteCues = [];
+var thumbHideTimer;
 
 var playSvg = '<polygon points="6,3 20,12 6,21"/>';
 var pauseSvg = '<rect x="5" y="3" width="4.5" height="18" rx="1"/><rect x="14.5" y="3" width="4.5" height="18" rx="1"/>';
@@ -417,9 +475,9 @@ if (subtitles && subtitles.length > 0) {
   });
   // Build subtitle panel
   var subHtml = '<div class="quality-panel-title">Subtitles</div>';
-  subHtml += '<button class="quality-option active" onclick="setSub(-1, this)"><span>Off</span><span class="check">✓</span></button>';
+  subHtml += '<button class="quality-option active" tabindex="0" onclick="setSub(-1, this)"><span>Off</span><span class="check">✓</span></button>';
   subtitles.forEach(function(sub, i) {
-    subHtml += '<button class="quality-option" onclick="setSub(' + i + ', this)"><span>' + sub.lang + '</span><span class="check"></span></button>';
+    subHtml += '<button class="quality-option" tabindex="0" onclick="setSub(' + i + ', this)"><span>' + sub.lang + '</span><span class="check"></span></button>';
   });
   subPanel.innerHTML = subHtml;
 }
@@ -499,6 +557,183 @@ v.addEventListener('loadedmetadata', function() { dur.textContent = fmt(v.durati
 document.getElementById('backBtn').addEventListener('click', function(e) {
   e.stopPropagation();
   window.ReactNativeWebView.postMessage('back');
+});
+
+// --- Sprite thumbnail preview ---
+if (spriteVttUrl) {
+  // Parse VTT to extract cues with sprite coordinates
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', spriteVttUrl, true);
+  xhr.onload = function() {
+    if (xhr.status !== 200) return;
+    var lines = xhr.responseText.split('\\n');
+    var i = 0;
+    while (i < lines.length) {
+      var line = lines[i].trim();
+      // Look for timestamp lines: 00:00:00.000 --> 00:00:10.000
+      var match = line.match(/(\\d+:\\d+:\\d+\\.\\d+)\\s*-->\\s*(\\d+:\\d+:\\d+\\.\\d+)/);
+      if (match) {
+        var start = parseVttTime(match[1]);
+        var end = parseVttTime(match[2]);
+        i++;
+        if (i < lines.length) {
+          var urlLine = lines[i].trim();
+          // Parse: sprites/sprite_1.jpg#xywh=0,0,160,90
+          var parts = urlLine.split('#xywh=');
+          if (parts.length === 2) {
+            var imgUrl = parts[0];
+            // Resolve relative to VTT URL
+            if (!imgUrl.startsWith('http')) {
+              var base = spriteVttUrl.substring(0, spriteVttUrl.lastIndexOf('/') + 1);
+              imgUrl = base + imgUrl;
+            }
+            var coords = parts[1].split(',').map(Number);
+            spriteCues.push({ start: start, end: end, url: imgUrl, x: coords[0], y: coords[1], w: coords[2], h: coords[3] });
+          }
+        }
+      }
+      i++;
+    }
+    console.log('Loaded ' + spriteCues.length + ' sprite cues');
+  };
+  xhr.send();
+}
+
+function parseVttTime(str) {
+  var p = str.split(':');
+  var sec = parseFloat(p[2]) + parseInt(p[1]) * 60 + parseInt(p[0]) * 3600;
+  return sec;
+}
+
+function showThumbAtTime(sec) {
+  if (!spriteCues.length) return;
+  // Find matching cue
+  var cue = null;
+  for (var i = 0; i < spriteCues.length; i++) {
+    if (sec >= spriteCues[i].start && sec < spriteCues[i].end) {
+      cue = spriteCues[i]; break;
+    }
+  }
+  if (!cue) { hideThumb(); return; }
+
+  thumbPreview.style.width = cue.w + 'px';
+  thumbPreview.style.height = cue.h + 'px';
+  thumbPreview.style.backgroundImage = 'url(' + cue.url + ')';
+  thumbPreview.style.backgroundPosition = '-' + cue.x + 'px -' + cue.y + 'px';
+  thumbPreview.style.backgroundSize = 'auto';
+  thumbTime.textContent = fmt(sec);
+  thumbPreview.classList.add('show');
+
+  clearTimeout(thumbHideTimer);
+  thumbHideTimer = setTimeout(hideThumb, 1500);
+}
+
+function hideThumb() {
+  thumbPreview.classList.remove('show');
+}
+
+// --- Visual feedback helpers ---
+function seekBy(delta) {
+  var newTime = Math.max(0, Math.min(v.duration||0, v.currentTime + delta));
+  v.currentTime = newTime;
+  // Smooth progress update
+  if (v.duration) {
+    var pct = (newTime / v.duration) * 100;
+    seek.value = pct * 10;
+    updateProgress(pct);
+    cur.textContent = fmt(newTime);
+  }
+  // Show seek text inside the button, hide icon
+  var isForward = delta > 0;
+  var btn = isForward ? ffBtn : rwBtn;
+  var label = isForward ? ffLabel : ffLabel;
+  if (isForward) {
+    ffLabel.textContent = '+' + delta + 's';
+    ffBtn.classList.add('seek-active');
+    rwBtn.classList.remove('seek-active');
+  } else {
+    rwLabel.textContent = delta + 's';
+    rwBtn.classList.add('seek-active');
+    ffBtn.classList.remove('seek-active');
+  }
+  clearTimeout(seekResetTimer);
+  seekResetTimer = setTimeout(function() {
+    ffBtn.classList.remove('seek-active');
+    rwBtn.classList.remove('seek-active');
+  }, 900);
+  showThumbAtTime(newTime);
+  showOverlay();
+}
+
+// --- TV D-pad / keyboard support ---
+document.addEventListener('keydown', function(e) {
+  var key = e.key || e.code;
+  showOverlay();
+
+  // Check if a panel (subtitle/quality) is open
+  var panelOpen = subPanel.classList.contains('show') || qualityPanel.classList.contains('show');
+  var openPanel = subPanel.classList.contains('show') ? subPanel : (qualityPanel.classList.contains('show') ? qualityPanel : null);
+
+  if (panelOpen && openPanel) {
+    var btns = Array.from(openPanel.querySelectorAll('button.quality-option'));
+    var focused = openPanel.querySelector('button:focus') || openPanel.querySelector('button.active');
+    var idx = btns.indexOf(focused);
+
+    switch(key) {
+      case 'ArrowUp':
+        e.preventDefault();
+        if (idx > 0) btns[idx - 1].focus();
+        else btns[btns.length - 1].focus();
+        return;
+      case 'ArrowDown':
+        e.preventDefault();
+        if (idx < btns.length - 1) btns[idx + 1].focus();
+        else btns[0].focus();
+        return;
+      case 'Enter':
+        e.preventDefault();
+        if (focused) focused.click();
+        return;
+      case 'Escape':
+      case 'GoBack':
+        e.preventDefault();
+        subPanel.classList.remove('show');
+        qualityPanel.classList.remove('show');
+        return;
+    }
+  }
+
+  switch(key) {
+    case 'ArrowRight':
+      e.preventDefault();
+      seekBy(10);
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      seekBy(-10);
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      // Open subtitle panel with up key
+      if (subtitles && subtitles.length > 0) {
+        qualityPanel.classList.remove('show');
+        subPanel.classList.add('show');
+        var firstBtn = subPanel.querySelector('button');
+        if (firstBtn) firstBtn.focus();
+      }
+      break;
+    case 'Enter':
+    case ' ':
+    case 'MediaPlayPause':
+      e.preventDefault();
+      if (v.paused) { v.play(); } else { v.pause(); }
+      break;
+    case 'Escape':
+    case 'GoBack':
+      e.preventDefault();
+      window.ReactNativeWebView.postMessage('back');
+      break;
+  }
 });
 
 showOverlay();
