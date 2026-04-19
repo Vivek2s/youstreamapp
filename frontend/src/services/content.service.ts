@@ -256,4 +256,9 @@ export const contentService = {
     if (result.success) return result.data;
     throw new Error(result.error?.message || 'Subtitle upload failed');
   },
+
+  async deleteSubtitle(contentId: string, lang: string) {
+    const { data } = await api.delete(`/upload/subtitle/${contentId}/${encodeURIComponent(lang)}`);
+    return data.data;
+  },
 };

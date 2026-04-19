@@ -223,6 +223,34 @@ export async function uploadSubtitle(req: Request, res: Response) {
   }
 }
 
+// DELETE /api/v1/upload/subtitle/:contentId/:lang — Remove a subtitle
+export async function deleteSubtitle(req: Request, res: Response) {
+  try {
+    const { contentId, lang } = req.params;
+
+    const content = await Content.findById(contentId);
+    if (!content) {
+      return sendError(res, 'NOT_FOUND', 'Content not found', 404);
+    }
+
+    const updatedSubs = content.streaming.subtitles.filter(s => s.lang !== lang);
+
+    if (updatedSubs.length === content.streaming.subtitles.length) {
+      return sendError(res, 'NOT_FOUND', `Subtitle "${lang}" not found`, 404);
+    }
+
+    await Content.findByIdAndUpdate(contentId, {
+      $set: { 'streaming.subtitles': updatedSubs },
+    });
+
+    console.log(`🗑️  Subtitle removed for ${contentId}: ${lang}`);
+    return sendSuccess(res, { subtitles: updatedSubs }, 'Subtitle removed');
+  } catch (error) {
+    console.error('deleteSubtitle error:', error);
+    return sendError(res, 'SERVER_ERROR', 'Failed to remove subtitle', 500);
+  }
+}
+
 // POST /api/v1/upload/video
 export async function uploadVideo(req: Request, res: Response) {
   try {

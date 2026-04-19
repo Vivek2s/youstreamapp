@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { uploadVideo, getTranscodeStatus, uploadSubtitle } from '../controllers/upload.controller';
+import { uploadVideo, getTranscodeStatus, uploadSubtitle, deleteSubtitle } from '../controllers/upload.controller';
 import { uploadTorrent, uploadMagnet, parseTorrentFiles, startSeriesDownload, cancelTorrent, getActivity } from '../controllers/torrent.controller';
 import { authMiddleware, adminMiddleware } from '../middleware/auth.middleware';
 import { config } from '../config';
@@ -86,6 +86,7 @@ router.post('/torrent/download', authMiddleware, startSeriesDownload);
 router.post('/magnet', authMiddleware, uploadMagnet);
 router.post('/torrent/:contentId/cancel', authMiddleware, cancelTorrent);
 router.post('/subtitle/:contentId', authMiddleware, subtitleUpload.single('subtitle'), uploadSubtitle);
+router.delete('/subtitle/:contentId/:lang', authMiddleware, deleteSubtitle);
 router.get('/status/:contentId', authMiddleware, getTranscodeStatus);
 router.get('/activity', authMiddleware, getActivity);
 

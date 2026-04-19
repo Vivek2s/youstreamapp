@@ -171,9 +171,31 @@ export default function ContentDetailScreen({ navigation, route }: Props) {
           <View style={styles.subsRow}>
             <Text style={styles.subsLabel}>Subtitles: </Text>
             {content.streaming.subtitles.map((s, i) => (
-              <View key={i} style={styles.subBadge}>
+              <TouchableOpacity
+                key={i}
+                style={styles.subBadge}
+                onLongPress={() => {
+                  Alert.alert('Remove Subtitle', `Remove "${s.lang}" subtitle?`, [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Remove', style: 'destructive',
+                      onPress: async () => {
+                        try {
+                          await contentService.deleteSubtitle(contentId, s.lang);
+                          setContent((prev) => prev ? {
+                            ...prev,
+                            streaming: { ...prev.streaming, subtitles: prev.streaming.subtitles.filter(sub => sub.lang !== s.lang) },
+                          } : prev);
+                        } catch (err: any) {
+                          Alert.alert('Error', err.message || 'Failed to remove subtitle');
+                        }
+                      },
+                    },
+                  ]);
+                }}
+              >
                 <Text style={styles.subBadgeText}>{s.lang}</Text>
-              </View>
+              </TouchableOpacity>
             ))}
           </View>
         )}
