@@ -22,7 +22,7 @@ export const config = {
 
   // OTP
   otpMode: process.env.OTP_MODE || 'mock',
-  otpMockCode: process.env.OTP_MOCK_CODE || '123456',
+  otpMockCode: process.env.OTP_MOCK_CODE || '006699',
   otpExpiryMinutes: parseInt(process.env.OTP_EXPIRY_MINUTES || '5', 10),
 
   // AWS

@@ -2,6 +2,16 @@ import { Request, Response } from 'express';
 import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+
+// Convert SRT/ASS/SSA to VTT in pure Node.js (no FFmpeg needed)
+function convertSrtToVtt(srtContent: string): string {
+  let vtt = 'WEBVTT\n\n';
+  // SRT uses comma in timestamps (00:01:23,456), VTT uses dot (00:01:23.456)
+  vtt += srtContent
+    .replace(/\r\n/g, '\n')
+    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+  return vtt;
+}
 import { Content } from '../models/content.model';
 import { sendSuccess, sendError } from '../utils/response';
 import { config } from '../config';
@@ -175,13 +185,22 @@ export async function uploadSubtitle(req: Request, res: Response) {
 
     if (ext !== '.vtt') {
       vttPath = tempPath.replace(/\.[^.]+$/, '.vtt');
-      try {
-        execSync(`ffmpeg -i "${tempPath}" -c:s webvtt -y "${vttPath}"`, { stdio: 'pipe' });
-      } catch (err) {
+
+      if (ext === '.srt') {
+        // SRT → VTT: pure text conversion, no FFmpeg needed
+        const srtContent = fs.readFileSync(tempPath, 'utf-8');
+        fs.writeFileSync(vttPath, convertSrtToVtt(srtContent));
+        fs.unlinkSync(tempPath);
+      } else {
+        // ASS/SSA → VTT: try FFmpeg, but handle gracefully if not available
+        try {
+          execSync(`ffmpeg -i "${tempPath}" -c:s webvtt -y "${vttPath}"`, { stdio: 'pipe' });
+        } catch (err) {
+          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+          return sendError(res, 'SERVER_ERROR', 'Failed to convert subtitle to VTT. ASS/SSA conversion requires FFmpeg.', 500);
+        }
         if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-        return sendError(res, 'SERVER_ERROR', 'Failed to convert subtitle to VTT', 500);
       }
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
     }
 
     const fileName = `${lang}.vtt`;

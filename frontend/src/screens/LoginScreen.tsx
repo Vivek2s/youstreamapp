@@ -4,15 +4,20 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
+  Dimensions,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { colors, spacing, borderRadius } from '../theme';
 import { useAppDispatch } from '../hooks/useAuth';
 import { sendOTP } from '../store/authSlice';
 import { AuthStackParamList } from '../types';
+
+const isTV = Platform.isTV;
+const { width: SCREEN_W } = Dimensions.get('window');
 
 type Props = {
   navigation: NativeStackNavigationProp<AuthStackParamList, 'Login'>;
@@ -48,43 +53,78 @@ export default function LoginScreen({ navigation }: Props) {
     }
   };
 
+  const ButtonComponent = isTV ? Pressable : TouchableOpacity;
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View style={styles.content}>
-        <Text style={styles.logo}>YouStream</Text>
-        <Text style={styles.subtitle}>Sign in to start watching</Text>
+      <View style={[styles.content, isTV && styles.tvContent]}>
+        {isTV && <View style={styles.tvCard}>
+          <Text style={[styles.logo, isTV && styles.tvLogo]}>YouStream</Text>
+          <Text style={styles.subtitle}>Sign in to start watching</Text>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.prefix}>+91</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Mobile number"
-            placeholderTextColor={colors.placeholder}
-            keyboardType="phone-pad"
-            value={phone}
-            onChangeText={setPhone}
-            maxLength={10}
-            autoFocus
-          />
-        </View>
+          <View style={styles.inputContainer}>
+            <Text style={styles.prefix}>+91</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Mobile number"
+              placeholderTextColor={colors.placeholder}
+              keyboardType="phone-pad"
+              value={phone}
+              onChangeText={setPhone}
+              maxLength={10}
+              autoFocus
+            />
+          </View>
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+          {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        <TouchableOpacity
-          style={[styles.button, loading && styles.buttonDisabled]}
-          onPress={handleSendOTP}
-          disabled={loading}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.buttonText}>{loading ? 'Sending...' : 'Get OTP'}</Text>
-        </TouchableOpacity>
+          <ButtonComponent
+            style={[styles.button, loading && styles.buttonDisabled]}
+            onPress={handleSendOTP}
+            disabled={loading}
+            {...(!isTV && { activeOpacity: 0.8 })}
+            {...(isTV && { focusable: true })}
+          >
+            <Text style={styles.buttonText}>{loading ? 'Sending...' : 'Get OTP'}</Text>
+          </ButtonComponent>
 
-        <Text style={styles.hint}>
-          Mock mode: OTP is always 123456
-        </Text>
+          {/* <Text style={styles.hint}>Mock mode: OTP is always 123456</Text> */}
+        </View>}
+
+        {!isTV && <>
+          <Text style={styles.logo}>YouStream</Text>
+          <Text style={styles.subtitle}>Sign in to start watching</Text>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.prefix}>+91</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Mobile number"
+              placeholderTextColor={colors.placeholder}
+              keyboardType="phone-pad"
+              value={phone}
+              onChangeText={setPhone}
+              maxLength={10}
+              autoFocus
+            />
+          </View>
+
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+
+          <ButtonComponent
+            style={[styles.button, loading && styles.buttonDisabled]}
+            onPress={handleSendOTP}
+            disabled={loading}
+            {...(!isTV && { activeOpacity: 0.8 })}
+          >
+            <Text style={styles.buttonText}>{loading ? 'Sending...' : 'Get OTP'}</Text>
+          </ButtonComponent>
+
+          {/* <Text style={styles.hint}>Mock mode: OTP is always 123456</Text> */}
+        </>}
       </View>
     </KeyboardAvoidingView>
   );
@@ -100,12 +140,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.xxl,
   },
+  tvContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tvCard: {
+    width: SCREEN_W * 0.32,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    padding: spacing.xxl,
+    paddingVertical: 40,
+  },
   logo: {
     fontSize: 40,
     fontWeight: '900',
     color: colors.primary,
     textAlign: 'center',
     letterSpacing: -1,
+  },
+  tvLogo: {
+    fontSize: 36,
   },
   subtitle: {
     fontSize: 16,

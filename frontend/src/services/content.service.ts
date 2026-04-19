@@ -18,6 +18,11 @@ export const contentService = {
     return data.data;
   },
 
+  async updateContent(id: string, updates: { title?: string; description?: string; rating?: string }) {
+    const { data } = await api.put(`/content/${id}`, updates);
+    return data.data;
+  },
+
   async search(q: string) {
     const { data } = await api.get('/search', { params: { q } });
     return data.data;
@@ -148,6 +153,56 @@ export const contentService = {
     throw new Error(result.error?.message || 'Torrent upload failed');
   },
 
+  async parseTorrent(file: { uri: string; name: string; type: string }) {
+    const token = await AsyncStorage.getItem('accessToken');
+    let filePath = file.uri;
+    if (filePath.startsWith('file://')) filePath = filePath.replace('file://', '');
+
+    const resp = await ReactNativeBlobUtil.fetch(
+      'POST',
+      `${API_BASE_URL}/upload/torrent/parse`,
+      { Authorization: `Bearer ${token}`, 'Content-Type': 'multipart/form-data' },
+      [{ name: 'torrent', filename: file.name, type: file.type || 'application/x-bittorrent', data: ReactNativeBlobUtil.wrap(filePath) }],
+    );
+    const result = resp.json();
+    if (result.success) return result.data;
+    throw new Error(result.error?.message || 'Failed to parse torrent');
+  },
+
+  async parseMagnet(magnetLink: string) {
+    const { data } = await api.post('/upload/torrent/parse', { magnetLink });
+    return data.data;
+  },
+
+  async startSeriesDownload(torrentId: string, metadata: {
+    title: string; description?: string; rating?: string; selectedFiles: number[]; transcode?: boolean;
+  }) {
+    const { data } = await api.post('/upload/torrent/download', {
+      torrentId,
+      title: metadata.title,
+      description: metadata.description || '',
+      rating: metadata.rating || 'U',
+      selectedFiles: metadata.selectedFiles,
+      transcode: metadata.transcode || false,
+    });
+    return data.data;
+  },
+
+  async uploadMagnet(
+    magnetLink: string,
+    metadata: { title: string; description?: string; type?: string; rating?: string; transcode?: boolean },
+  ) {
+    const { data } = await api.post('/upload/magnet', {
+      magnetLink,
+      title: metadata.title,
+      description: metadata.description || '',
+      type: metadata.type || 'movie',
+      rating: metadata.rating || 'U',
+      transcode: metadata.transcode || false,
+    });
+    return data.data;
+  },
+
   async getTranscodeStatus(contentId: string) {
     const { data } = await api.get(`/upload/status/${contentId}`);
     return data.data;
@@ -166,5 +221,39 @@ export const contentService = {
   async getActivity() {
     const { data } = await api.get('/upload/activity');
     return data.data;
+  },
+
+  async uploadSubtitle(
+    contentId: string,
+    file: { uri: string; name: string; type: string },
+    lang?: string,
+  ) {
+    const token = await AsyncStorage.getItem('accessToken');
+
+    let filePath = file.uri;
+    if (filePath.startsWith('file://')) {
+      filePath = filePath.replace('file://', '');
+    }
+
+    const fields: any[] = [
+      { name: 'subtitle', filename: file.name, type: file.type || 'application/x-subrip', data: ReactNativeBlobUtil.wrap(filePath) },
+    ];
+    if (lang) {
+      fields.push({ name: 'lang', data: lang });
+    }
+
+    const resp = await ReactNativeBlobUtil.fetch(
+      'POST',
+      `${API_BASE_URL}/upload/subtitle/${contentId}`,
+      {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'multipart/form-data',
+      },
+      fields,
+    );
+
+    const result = resp.json();
+    if (result.success) return result.data;
+    throw new Error(result.error?.message || 'Subtitle upload failed');
   },
 };
