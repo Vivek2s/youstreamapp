@@ -3,7 +3,6 @@ import path from 'path';
 import fs from 'fs';
 import torrentStream from 'torrent-stream';
 import { Content } from '../models/content.model';
-import { Job } from '../models/job.model';
 import { sendSuccess, sendError } from '../utils/response';
 import { config } from '../config';
 import { enqueueJob, cancelJob } from '../queues/jobQueue';
@@ -152,7 +151,10 @@ export async function startSeriesDownload(req: Request, res: Response) {
       return sendError(res, 'VALIDATION', 'No files selected');
     }
 
-    const isSeries = selectedFileInfos.length > 1;
+    // Detect series: multiple files selected, OR the torrent has multiple videos, OR filenames have episode patterns
+    const totalVideoFiles = parsed.files.filter((f: any) => f.isVideo).length;
+    const hasEpisodePattern = selectedFileInfos.some((f: any) => /[Ss]\d+[Ee]\d+|\d+x\d+|[Ee][Pp]?\d+/i.test(f.name));
+    const isSeries = selectedFileInfos.length > 1 || totalVideoFiles > 1 || hasEpisodePattern;
 
     // Build episode list from filenames
     const episodes = selectedFileInfos.map((f: any, i: number) => {

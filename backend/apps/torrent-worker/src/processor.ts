@@ -133,19 +133,38 @@ async function extractSubtitles(contentId: string, inputPath: string): Promise<{
     const probeData = JSON.parse(probeOutput);
     const subStreams = probeData.streams || [];
 
+    if (subStreams.length === 0) {
+      console.log(`📝 No embedded subtitle streams found in ${path.basename(inputPath)}`);
+    } else {
+      console.log(`📝 Found ${subStreams.length} embedded subtitle stream(s) in ${path.basename(inputPath)}`);
+    }
+
     for (let i = 0; i < subStreams.length; i++) {
       const stream = subStreams[i];
+      const codec = stream.codec_name || 'unknown';
       const lang = stream.tags?.language || stream.tags?.title || `sub${i}`;
+
+      // PGS/HDMV/DVB bitmap subtitles cannot be converted to text-based VTT
+      if (['hdmv_pgs_subtitle', 'pgssub', 'dvd_subtitle', 'dvdsub', 'dvb_subtitle'].includes(codec)) {
+        console.log(`📝 Skipping subtitle #${i} (${lang}): ${codec} is bitmap-based, cannot convert to VTT`);
+        continue;
+      }
+
       const vttPath = path.join(subsDir, `${lang}_${i}.vtt`);
       try {
         execSync(`ffmpeg -i "${inputPath}" -map 0:s:${i} -c:s webvtt -y "${vttPath}"`, { stdio: 'pipe' });
         if (fs.existsSync(vttPath) && fs.statSync(vttPath).size > 0) {
           const url = await uploadSubtitleFile(contentId, vttPath, `${lang}_${i}.vtt`);
           if (url) results.push({ lang, url });
+          console.log(`📝 Extracted subtitle #${i}: ${lang} (${codec})`);
         }
-      } catch {}
+      } catch (err: any) {
+        console.warn(`⚠️  Failed to extract subtitle #${i} (${lang}, ${codec}): ${err.message?.substring(0, 100)}`);
+      }
     }
-  } catch {}
+  } catch (err: any) {
+    console.warn(`⚠️  Subtitle probe failed for ${path.basename(inputPath)}: ${err.message?.substring(0, 100)}`);
+  }
 
   const videoDir = path.dirname(inputPath);
   const SUBTITLE_EXTS = ['.srt', '.vtt', '.ass', '.ssa'];
