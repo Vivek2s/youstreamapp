@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, StatusBar, NativeModules, Platform, TVEventHandler } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, StatusBar, NativeModules, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { WebView as WebViewType } from 'react-native-webview';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -7,6 +7,7 @@ import { RouteProp } from '@react-navigation/native';
 import Orientation from 'react-native-orientation-locker';
 
 const { ImmersiveMode } = NativeModules;
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors, spacing } from '../theme';
 import { contentService } from '../services/content.service';
 import { HomeStackParamList } from '../types';
@@ -24,6 +25,7 @@ export default function PlayerScreen({ navigation, route }: Props) {
   const [streamType, setStreamType] = useState<'hls' | 'raw'>('raw');
   const [subtitles, setSubtitles] = useState<{ lang: string; url: string }[]>([]);
   const [spriteVttUrl, setSpriteVttUrl] = useState('');
+  const [subtitlePref, setSubtitlePref] = useState(false);
   const [isPortrait, setIsPortrait] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -33,6 +35,8 @@ export default function PlayerScreen({ navigation, route }: Props) {
     if (Platform.OS === 'android' && ImmersiveMode) {
       ImmersiveMode.enable();
     }
+    // Load subtitle preference
+    AsyncStorage.getItem('subtitleEnabled').then(v => { if (v === 'true') setSubtitlePref(true); });
     loadStreamUrl();
     return () => {
       // Exit immersive and re-lock to portrait when leaving player (mobile only)
@@ -121,7 +125,7 @@ export default function PlayerScreen({ navigation, route }: Props) {
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   *:focus { outline:none !important; }
   button:focus, input:focus { outline:none !important; box-shadow:none !important; }
-  body { background:#000; width:100vw; height:100vh; overflow:hidden; font-family:-apple-system,sans-serif; }
+  body { background:#000; width:100vw; height:100vh; overflow:hidden; font-family:-apple-system,sans-serif; -webkit-user-select:none; }
   video { width:100%; height:100%; object-fit:contain; display:block; }
 
   .overlay {
@@ -246,6 +250,11 @@ export default function PlayerScreen({ navigation, route }: Props) {
     background:none; border:none; cursor:pointer; flex-shrink:0;
   }
   .quality-btn svg { width:22px; height:22px; filter:drop-shadow(0 1px 3px rgba(0,0,0,0.8)); }
+  .quality-btn.tv-focused, .sub-btn.tv-focused {
+    background:rgba(255,255,255,0.25); border-radius:50%;
+    transform:scale(1.15);
+    box-shadow:0 0 0 2px #fff;
+  }
   .quality-panel {
     position:fixed; right:12px; bottom:90px;
     background:rgba(20,20,20,0.95); border-radius:10px;
@@ -274,6 +283,10 @@ export default function PlayerScreen({ navigation, route }: Props) {
   }
 
   /* Subtitle selector */
+  .sub-btn, .quality-btn { outline:none; }
+  .sub-btn:focus, .quality-btn:focus {
+    background:rgba(255,255,255,0.2); border-radius:8px;
+  }
   .sub-btn {
     width:40px; height:40px; display:flex; align-items:center; justify-content:center;
     background:none; border:none; cursor:pointer; flex-shrink:0;
@@ -289,7 +302,7 @@ export default function PlayerScreen({ navigation, route }: Props) {
   }
   .sub-panel.show { display:block; }
 </style>
-</head><body>
+</head><body tabindex="0">
 
 <video id="v" playsinline></video>
 <div class="quality-panel" id="qualityPanel">
@@ -382,6 +395,7 @@ var hls = null;
 var streamType = '${streamType}';
 var streamUrl = '${streamUrl}';
 var subtitles = ${JSON.stringify(subtitles)};
+var subtitlePrefOn = ${subtitlePref ? 'true' : 'false'};
 var spriteVttUrl = '${spriteVttUrl}';
 var thumbPreview = document.getElementById('thumbPreview');
 var thumbTime = document.getElementById('thumbTime');
@@ -401,9 +415,19 @@ function showOverlay() {
   overlay.classList.remove('hidden');
   clearTimeout(hideTimer);
   hideTimer = setTimeout(function() {
-    if(!v.paused) { overlay.classList.add('hidden'); qualityPanel.classList.remove('show'); }
+    if(!v.paused) {
+      overlay.classList.add('hidden');
+      qualityPanel.classList.remove('show');
+      subPanel.classList.remove('show');
+      // Re-focus body so D-pad events work immediately
+      document.body.focus();
+    }
   }, 4000);
 }
+
+// Keep body focused for D-pad input
+document.body.focus();
+v.addEventListener('play', function() { setTimeout(function() { document.body.focus(); }, 100); });
 
 // --- Video source setup ---
 if (streamType === 'hls' && typeof Hls !== 'undefined' && Hls.isSupported()) {
@@ -480,6 +504,12 @@ if (subtitles && subtitles.length > 0) {
     subHtml += '<button class="quality-option" tabindex="0" onclick="setSub(' + i + ', this)"><span>' + sub.lang + '</span><span class="check"></span></button>';
   });
   subPanel.innerHTML = subHtml;
+
+  // Auto-enable first subtitle if preference is on
+  if (subtitlePrefOn && subtitles.length > 0) {
+    var firstBtn = subPanel.querySelectorAll('button.quality-option')[1]; // index 0 is "Off", 1 is first subtitle
+    if (firstBtn) setSub(0, firstBtn);
+  }
 }
 
 function setSub(idx, el) {
@@ -494,6 +524,8 @@ function setSub(idx, el) {
   el.classList.add('active');
   el.querySelector('.check').textContent = '✓';
   subPanel.classList.remove('show');
+  // Save subtitle preference
+  window.ReactNativeWebView.postMessage(idx >= 0 ? 'subtitle-pref:on' : 'subtitle-pref:off');
   showOverlay();
 }
 
@@ -703,35 +735,77 @@ document.addEventListener('keydown', function(e) {
     }
   }
 
+  // Overlay buttons (subtitle, quality) — only those that are visible
+  var overlayBtns = [subBtn, qualityBtn].filter(function(b) { return b.style.display !== 'none'; });
+  var btnFocusIdx = -1; // -1 = no button focused
+  overlayBtns.forEach(function(b, i) { if (b.classList.contains('tv-focused')) btnFocusIdx = i; });
+  var overlayVisible = !overlay.classList.contains('hidden');
+
   switch(key) {
     case 'ArrowRight':
       e.preventDefault();
-      seekBy(10);
+      if (btnFocusIdx >= 0 && btnFocusIdx < overlayBtns.length - 1) {
+        // Move focus to next button
+        overlayBtns[btnFocusIdx].classList.remove('tv-focused');
+        overlayBtns[btnFocusIdx + 1].classList.add('tv-focused');
+      } else {
+        seekBy(10);
+      }
       break;
     case 'ArrowLeft':
       e.preventDefault();
-      seekBy(-10);
+      if (btnFocusIdx > 0) {
+        overlayBtns[btnFocusIdx].classList.remove('tv-focused');
+        overlayBtns[btnFocusIdx - 1].classList.add('tv-focused');
+      } else if (btnFocusIdx === 0) {
+        // Unfocus buttons
+        overlayBtns[0].classList.remove('tv-focused');
+      } else {
+        seekBy(-10);
+      }
       break;
     case 'ArrowUp':
       e.preventDefault();
-      // Open subtitle panel with up key
-      if (subtitles && subtitles.length > 0) {
-        qualityPanel.classList.remove('show');
-        subPanel.classList.add('show');
-        var firstBtn = subPanel.querySelector('button');
-        if (firstBtn) firstBtn.focus();
+      if (btnFocusIdx >= 0) {
+        // Already on buttons — do nothing (can't go higher)
+      } else if (overlayVisible && overlayBtns.length > 0) {
+        // Overlay is showing — focus first button
+        overlayBtns[0].classList.add('tv-focused');
+      } else {
+        showOverlay();
+      }
+      break;
+    case 'ArrowDown':
+      e.preventDefault();
+      if (btnFocusIdx >= 0) {
+        // Unfocus buttons
+        overlayBtns[btnFocusIdx].classList.remove('tv-focused');
       }
       break;
     case 'Enter':
+    case 'Select':
     case ' ':
     case 'MediaPlayPause':
       e.preventDefault();
-      if (v.paused) { v.play(); } else { v.pause(); }
+      if (btnFocusIdx >= 0) {
+        // Press the focused button (opens panel)
+        overlayBtns[btnFocusIdx].click();
+        overlayBtns[btnFocusIdx].classList.remove('tv-focused');
+      } else {
+        // Show overlay + play/pause
+        showOverlay();
+        if (v.paused) { v.play(); } else { v.pause(); }
+      }
       break;
     case 'Escape':
     case 'GoBack':
       e.preventDefault();
-      window.ReactNativeWebView.postMessage('back');
+      if (panelOpen) {
+        subPanel.classList.remove('show');
+        qualityPanel.classList.remove('show');
+      } else {
+        window.ReactNativeWebView.postMessage('back');
+      }
       break;
   }
 });
@@ -753,9 +827,24 @@ showOverlay();
         javaScriptEnabled={true}
         allowsFullscreenVideo={true}
         mixedContentMode="compatibility"
+        focusable={true}
+        onLoad={() => {
+          // Ensure WebView has focus for D-pad events on TV
+          if (Platform.isTV && webViewRef.current) {
+            webViewRef.current.requestFocus?.();
+            webViewRef.current.injectJavaScript('document.body.focus(); true;');
+          }
+        }}
         onMessage={(event) => {
-          if (event.nativeEvent.data === 'back') {
+          const msg = event.nativeEvent.data;
+          if (msg === 'back') {
             navigation.goBack();
+          } else if (msg === 'subtitle-pref:on') {
+            AsyncStorage.setItem('subtitleEnabled', 'true');
+            setSubtitlePref(true);
+          } else if (msg === 'subtitle-pref:off') {
+            AsyncStorage.setItem('subtitleEnabled', 'false');
+            setSubtitlePref(false);
           }
         }}
       />

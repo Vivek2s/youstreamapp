@@ -70,18 +70,29 @@ export const contentService = {
 
   async uploadVideo(
     file: { uri: string; name: string; type: string },
-    metadata: { title: string; description?: string; type?: string; rating?: string; transcode?: boolean },
+    metadata: { title: string; description?: string; type?: string; rating?: string; transcode?: boolean; genreIds?: string[] },
     onProgress?: (percent: number) => void,
   ) {
     const token = await AsyncStorage.getItem('accessToken');
 
-    // Normalize URI: strip file:// prefix for react-native-blob-util
     let filePath = file.uri;
     if (filePath.startsWith('file://')) {
       filePath = filePath.replace('file://', '');
     }
 
     console.log('[Upload] Starting native upload, file:', filePath, file.name);
+
+    const fields: any[] = [
+      { name: 'video', filename: file.name, type: file.type || 'video/mp4', data: ReactNativeBlobUtil.wrap(filePath) },
+      { name: 'title', data: metadata.title },
+      { name: 'description', data: metadata.description || '' },
+      { name: 'type', data: metadata.type || 'movie' },
+      { name: 'rating', data: metadata.rating || 'U' },
+      { name: 'transcode', data: metadata.transcode ? 'true' : 'false' },
+    ];
+    if (metadata.genreIds && metadata.genreIds.length > 0) {
+      fields.push({ name: 'genreIds', data: JSON.stringify(metadata.genreIds) });
+    }
 
     const resp = await ReactNativeBlobUtil.fetch(
       'POST',
@@ -90,14 +101,7 @@ export const contentService = {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'multipart/form-data',
       },
-      [
-        { name: 'video', filename: file.name, type: file.type || 'video/mp4', data: ReactNativeBlobUtil.wrap(filePath) },
-        { name: 'title', data: metadata.title },
-        { name: 'description', data: metadata.description || '' },
-        { name: 'type', data: metadata.type || 'movie' },
-        { name: 'rating', data: metadata.rating || 'U' },
-        { name: 'transcode', data: metadata.transcode ? 'true' : 'false' },
-      ],
+      fields,
     ).uploadProgress((written, total) => {
       if (onProgress) {
         onProgress(Math.round((written / total) * 100));
@@ -259,6 +263,47 @@ export const contentService = {
 
   async deleteSubtitle(contentId: string, lang: string) {
     const { data } = await api.delete(`/upload/subtitle/${contentId}/${encodeURIComponent(lang)}`);
+    return data.data;
+  },
+
+  async uploadThumbnail(contentId: string, file: { uri: string; name: string; type: string }) {
+    const token = await AsyncStorage.getItem('accessToken');
+    let filePath = file.uri;
+    if (filePath.startsWith('file://')) filePath = filePath.replace('file://', '');
+
+    const resp = await ReactNativeBlobUtil.fetch(
+      'POST',
+      `${API_BASE_URL}/upload/thumbnail/${contentId}`,
+      { Authorization: `Bearer ${token}`, 'Content-Type': 'multipart/form-data' },
+      [{ name: 'thumbnail', filename: file.name, type: file.type || 'image/jpeg', data: ReactNativeBlobUtil.wrap(filePath) }],
+    );
+    const result = resp.json();
+    if (result.success) return result.data;
+    throw new Error(result.error?.message || 'Thumbnail upload failed');
+  },
+
+  async deleteContent(contentId: string) {
+    const { data } = await api.delete(`/content/${contentId}`);
+    return data.data;
+  },
+
+  async clearActivity() {
+    const { data } = await api.post('/upload/activity/clear');
+    return data.data;
+  },
+
+  async hideActivityItem(contentId: string) {
+    const { data } = await api.post(`/upload/activity/hide/${contentId}`);
+    return data.data;
+  },
+
+  async updateProfile(updates: { name?: string }) {
+    const { data } = await api.put('/users/profile', updates);
+    return data.data;
+  },
+
+  async deleteAccount() {
+    const { data } = await api.delete('/users/account');
     return data.data;
   },
 };
