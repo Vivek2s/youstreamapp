@@ -20,6 +20,15 @@ fs.mkdirSync(STREAMS_DIR, { recursive: true });
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv'];
 const WEB_PLAYABLE = ['.mp4', '.webm'];
 
+// Convert SRT to VTT in pure Node.js (more reliable than ffmpeg for text subs)
+function convertSrtToVtt(srtContent: string): string {
+  let vtt = 'WEBVTT\n\n';
+  vtt += srtContent
+    .replace(/\r\n/g, '\n')
+    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+  return vtt;
+}
+
 // Track active torrent engines for cleanup on cancel
 const activeTorrents = new Map<string, any>();
 
@@ -179,14 +188,30 @@ async function extractSubtitles(contentId: string, inputPath: string): Promise<{
       if (ext === '.vtt') {
         const url = await uploadSubtitleFile(contentId, subFilePath, file);
         if (url) results.push({ lang: baseName, url });
+        console.log(`   📝 Copied external VTT: ${file}`);
+      } else if (ext === '.srt') {
+        // Pure Node.js SRT→VTT conversion (reliable)
+        try {
+          const srtContent = fs.readFileSync(subFilePath, 'utf-8');
+          fs.writeFileSync(vttPath, convertSrtToVtt(srtContent));
+          const url = await uploadSubtitleFile(contentId, vttPath, `${baseName}.vtt`);
+          if (url) results.push({ lang: baseName, url });
+          console.log(`   📝 Converted SRT to VTT: ${file}`);
+        } catch (err: any) {
+          console.warn(`   ⚠️  Failed to convert SRT ${file}: ${err.message}`);
+        }
       } else {
+        // ASS/SSA via ffmpeg
         try {
           execSync(`ffmpeg -i "${subFilePath}" -c:s webvtt -y "${vttPath}"`, { stdio: 'pipe' });
           if (fs.existsSync(vttPath) && fs.statSync(vttPath).size > 0) {
             const url = await uploadSubtitleFile(contentId, vttPath, `${baseName}.vtt`);
             if (url) results.push({ lang: baseName, url });
+            console.log(`   📝 Converted ${ext} to VTT: ${file}`);
           }
-        } catch {}
+        } catch (err: any) {
+          console.warn(`   ⚠️  Failed to convert ${ext} ${file}: ${err.message}`);
+        }
       }
     }
   } catch {}
@@ -560,20 +585,33 @@ async function processSingleVideoFile(jobId: string, contentId: string, videoFil
   deleteLocalDirectory(path.join(TORRENTS_DIR, contentId));
 
   const videoInfo = getVideoInfo(inputPath);
+
+  // Step 1: ALWAYS upload original to S3 raw bucket (never deleted)
+  if (config.storageMode === 's3') {
+    console.log(`☁️  Uploading original to S3 raw bucket: ${contentId}/original${ext}`);
+    await uploadFileToS3(inputPath, config.awsS3RawBucket, `${contentId}/original${ext}`, getVideoContentType(ext));
+  }
+
+  // Step 2: Extract subtitles from original (before any remux)
   await extractSubtitles(contentId, inputPath);
 
   if (transcode) {
+    // Upload original to streaming bucket too (for raw playback while transcoding)
+    if (config.storageMode === 's3') {
+      await uploadFileToS3(inputPath, config.awsS3StreamingBucket, `${contentId}/original${ext}`, getVideoContentType(ext));
+    }
     await Content.findByIdAndUpdate(contentId, {
-      $set: { status: 'transcoding', duration: Math.round(videoInfo.duration), isPortrait: videoInfo.isPortrait },
+      $set: {
+        status: 'transcoding',
+        rawUrl: config.storageMode === 's3' ? `${config.cloudfrontDomain}/${contentId}/original${ext}` : `/uploads/${contentId}/raw${ext}`,
+        duration: Math.round(videoInfo.duration),
+        isPortrait: videoInfo.isPortrait,
+      },
     });
-    // Enqueue transcode job instead of doing it in-process
-    await enqueueJob('transcode', contentId, {
-      inputPath,
-      videoInfo,
-      isEpisode: false,
-    });
+    await enqueueJob('transcode', contentId, { inputPath, videoInfo, isEpisode: false });
     await completeJob(jobId);
   } else {
+    // Direct serve — remux to MP4 if needed, upload to streaming bucket
     let servePath = inputPath;
     let serveExt = ext;
 
@@ -581,36 +619,35 @@ async function processSingleVideoFile(jobId: string, contentId: string, videoFil
       const mp4Path = path.join(uploadDir, 'raw.mp4');
       try {
         await remuxToMp4(inputPath, mp4Path);
-        fs.unlinkSync(inputPath);
         servePath = mp4Path;
         serveExt = '.mp4';
-      } catch {
-        // Remux failed — enqueue transcode as fallback
-        await Content.findByIdAndUpdate(contentId, {
-          $set: { status: 'transcoding', duration: Math.round(videoInfo.duration) },
-        });
-        await enqueueJob('transcode', contentId, { inputPath, videoInfo, isEpisode: false });
-        await completeJob(jobId);
-        return;
+        console.log(`✅ Remuxed ${ext} → .mp4 for ${contentId}`);
+      } catch (err: any) {
+        // Remux failed — publish with original file directly (player handles MKV)
+        console.warn(`⚠️ Remux failed for ${contentId}: ${err.message}. Publishing original.`);
       }
     }
-
-    await extractSubtitles(contentId, servePath);
 
     if (config.storageMode === 's3') {
       await uploadFileToS3(servePath, config.awsS3StreamingBucket, `${contentId}/original${serveExt}`, getVideoContentType(serveExt));
       await Content.findByIdAndUpdate(contentId, {
         $set: {
-          status: 'published', rawUrl: `${config.cloudfrontDomain}/${contentId}/original${serveExt}`,
-          duration: Math.round(videoInfo.duration), isPortrait: videoInfo.isPortrait, 'streaming.hlsUrl': '',
+          status: 'published',
+          rawUrl: `${config.cloudfrontDomain}/${contentId}/original${serveExt}`,
+          duration: Math.round(videoInfo.duration),
+          isPortrait: videoInfo.isPortrait,
+          'streaming.hlsUrl': '',
         },
       });
       deleteLocalDirectory(uploadDir);
     } else {
       await Content.findByIdAndUpdate(contentId, {
         $set: {
-          status: 'published', rawUrl: `/uploads/${contentId}/raw${serveExt}`,
-          duration: Math.round(videoInfo.duration), isPortrait: videoInfo.isPortrait, 'streaming.hlsUrl': '',
+          status: 'published',
+          rawUrl: `/uploads/${contentId}/raw${serveExt}`,
+          duration: Math.round(videoInfo.duration),
+          isPortrait: videoInfo.isPortrait,
+          'streaming.hlsUrl': '',
         },
       });
     }
@@ -621,11 +658,29 @@ async function processSingleVideoFile(jobId: string, contentId: string, videoFil
 async function processSeriesEpisodes(jobId: string, contentId: string, allVideos: string[], downloadDir: string, transcode: boolean) {
   await Content.findByIdAndUpdate(contentId, { $set: { status: 'transcoding', type: 'series' } });
 
+  // Collect all external subtitle files in the download dir
+  const SUBTITLE_EXTS = ['.srt', '.vtt', '.ass', '.ssa'];
+  const allSubtitleFiles: string[] = [];
+  const scanForSubs = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) scanForSubs(full);
+      else if (SUBTITLE_EXTS.includes(path.extname(entry.name).toLowerCase())) {
+        allSubtitleFiles.push(full);
+      }
+    }
+  };
+  try { scanForSubs(downloadDir); } catch {}
+  if (allSubtitleFiles.length > 0) {
+    console.log(`📝 Found ${allSubtitleFiles.length} external subtitle file(s) in torrent`);
+  }
+
   const processedEpisodes: any[] = [];
 
   for (let i = 0; i < allVideos.length; i++) {
     const videoFile = allVideos[i];
     const fileName = path.basename(videoFile);
+    const videoBaseName = path.basename(fileName, path.extname(fileName));
     const ext = path.extname(videoFile);
     const epInfo = parseEpisodeInfo(fileName);
     const epId = `${contentId}_ep${i}`;
@@ -637,7 +692,38 @@ async function processSeriesEpisodes(jobId: string, contentId: string, allVideos
     const inputPath = path.join(epUploadDir, `raw${ext}`);
     fs.copyFileSync(videoFile, inputPath);
 
+    // Match subtitle files to this episode by filename or episode number
+    // Priority: exact basename match > S01E03 pattern match
+    const episodeTag = `s${String(epInfo.season).padStart(2, '0')}e${String(epInfo.episode).padStart(2, '0')}`;
+    const matchedSubs = allSubtitleFiles.filter((subPath) => {
+      const subName = path.basename(subPath).toLowerCase();
+      const subBase = path.basename(subName, path.extname(subName));
+      // Exact basename match (e.g., "S01E01.mkv" → "S01E01.eng.srt")
+      if (subName.startsWith(videoBaseName.toLowerCase())) return true;
+      // Episode pattern match (e.g., "Sherlock.S01E01.srt")
+      if (subName.includes(episodeTag)) return true;
+      // Also try 1x01 pattern
+      if (subName.includes(`${epInfo.season}x${String(epInfo.episode).padStart(2, '0')}`)) return true;
+      return false;
+    });
+
+    // Copy matched subtitle files to the episode's upload dir
+    for (const subPath of matchedSubs) {
+      const subFileName = path.basename(subPath);
+      try {
+        fs.copyFileSync(subPath, path.join(epUploadDir, subFileName));
+        console.log(`   📝 Matched subtitle for episode ${i + 1}: ${subFileName}`);
+      } catch {}
+    }
+
     const videoInfo = getVideoInfo(inputPath);
+
+    // Upload original to S3 raw bucket (never deleted)
+    if (config.storageMode === 's3') {
+      console.log(`☁️  Uploading episode original to S3 raw: ${epId}/original${ext}`);
+      await uploadFileToS3(inputPath, config.awsS3RawBucket, `${epId}/original${ext}`, getVideoContentType(ext));
+    }
+
     const epSubtitles = await extractSubtitles(epId, inputPath);
 
     let thumbUrl = '';
@@ -645,6 +731,10 @@ async function processSeriesEpisodes(jobId: string, contentId: string, allVideos
 
     let episodeUrl = '';
     if (transcode) {
+      // Upload original to streaming too (for raw playback while transcoding)
+      if (config.storageMode === 's3') {
+        await uploadFileToS3(inputPath, config.awsS3StreamingBucket, `${epId}/original${ext}`, getVideoContentType(ext));
+      }
       const epOutputDir = path.join(STREAMS_DIR, epId);
       fs.mkdirSync(epOutputDir, { recursive: true });
       await new Promise<void>((resolve) => {
@@ -662,11 +752,18 @@ async function processSeriesEpisodes(jobId: string, contentId: string, allVideos
         });
       });
     } else {
+      // Direct serve — remux to MP4, upload to streaming bucket
       let servePath = inputPath;
       let serveExt = ext;
       if (!WEB_PLAYABLE.includes(ext.toLowerCase())) {
         const mp4Path = path.join(epUploadDir, 'raw.mp4');
-        try { await remuxToMp4(inputPath, mp4Path); fs.unlinkSync(inputPath); servePath = mp4Path; serveExt = '.mp4'; } catch {}
+        try {
+          await remuxToMp4(inputPath, mp4Path);
+          servePath = mp4Path;
+          serveExt = '.mp4';
+        } catch {
+          console.warn(`⚠️ Episode remux failed, publishing original ${ext}`);
+        }
       }
       if (config.storageMode === 's3') {
         await uploadFileToS3(servePath, config.awsS3StreamingBucket, `${epId}/original${serveExt}`, getVideoContentType(serveExt));
@@ -724,8 +821,14 @@ async function handleJobError(jobId: string, contentId: string, engine: any, mes
   }
   activeTorrents.delete(contentId);
 
+  // Clean ALL temp directories for this content
   const torrentDir = path.join(TORRENTS_DIR, contentId);
   if (fs.existsSync(torrentDir)) deleteLocalDirectory(torrentDir);
+  const uploadDir = path.join(UPLOADS_DIR, contentId);
+  if (fs.existsSync(uploadDir)) deleteLocalDirectory(uploadDir);
+  const streamsDir = path.join(STREAMS_DIR, contentId);
+  if (fs.existsSync(streamsDir)) deleteLocalDirectory(streamsDir);
+  console.log(`🧹 Cleaned all temp dirs for ${contentId}`);
 
   await failJob(jobId, message);
 }
